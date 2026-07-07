@@ -1,0 +1,22 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kaoshi:latest
+    container_name: kaoshi-app
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      # 密钥/白名单可放 .env 覆盖；缺省给出不安全兜底（仅本地用）
+      - JWT_SECRET=${JWT_SECRET:-please-change-this-secret-in-prod}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:4000}
+    volumes:
+      # SQLite 数据库与上传数据持久化到命名卷，容器重建不丢数据
+      - kaoshi_data:/app/.data
+    restart: unless-stopped
+
+volumes:
+  kaoshi_data:

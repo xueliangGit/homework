@@ -1,0 +1,103 @@
+:root {
+  /* 极致温柔护眼与多层软糖渐变背景 */
+  --bg-gradient: linear-gradient(135deg, #F5F7FB 0%, #E4ECF7 100%);
+  --bg-white: #FFFFFF;
+  
+  /* 多彩马卡龙软糖色系 (高饱和、温和、饱含情绪价值) */
+  --color-primary: #58CC02;      /* 多邻国苹果绿 */
+  --color-primary-depth: #46A302;/* 绿底座 */
+  
+  --color-secondary: #FF8A93;    /* 樱花糖水粉 */
+  --color-secondary-depth: #E06C75; /* 粉底座 */
+  
+  --color-blue: #1899D6;         /* 晴空宝石蓝 */
+  --color-blue-depth: #107DB3;   /* 蓝底座 */
+  
+  --color-yellow: #FFC800;       /* 柠檬布丁黄 */
+  --color-yellow-depth: #E6A800; /* 黄底座 */
+  
+  --color-purple: #B87CF8;       /* 蓝莓香芋紫 */
+  --color-purple-depth: #965AD6; /* 紫底座 */
+  
+  --color-orange: #FF9600;       /* 蜜桔暖橙色 */
+  --color-orange-depth: #E07D00; /* 橙底座 */
+
+  /* 辅助状态色 */
+  --color-success: #58CC02;
+  --color-warning: #FFC800;
+  --color-danger: #EA2B2B;
+  
+  /* 现代精致中性色 */
+  --color-dark: #3C3C3C;         /* 炭墨黑，极其温和的文字色 */
+  --color-text: #4B4B4B;
+  --color-text-light: #AFAFAF;
+  --color-gray-bg: #F7F7F7;
+  --color-gray-border: #E5E5E5;  /* 软糖边缘轻柔分界线 */
+  
+  /* 圆润软糖边角变量 */
+  --radius-xl: 30px;
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+  
+  /* 3D 软糖立体多层阴影 */
+  --shadow-jelly-sm: 0 4px 0 var(--color-gray-border);
+  --shadow-jelly-card: 0 12px 24px rgba(140, 150, 170, 0.1), 0 4px 0 var(--color-gray-border);
+  
+  /* 字体配置：优雅圆润的儿童无衬线字体 */
+  --font-family: "Nunito", "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif;
+  
+  /* 极致弹性运动曲线 */
+  --transition-jelly: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ===================== 学段主题（表面 / 圆角 / 字体）===================== */
+/* 幼：活泼卡通、超大圆角、明亮护眼 */
+[data-theme="you"] {
+  --bg-gradient: linear-gradient(135deg, #FFF3F8 0%, #E8F4FF 100%);
+  --radius-xl: 38px;
+  --radius-lg: 26px;
+  --radius-md: 18px;
+  --radius-sm: 12px;
+  --shadow-jelly-sm: 0 5px 0 var(--color-gray-border);
+  --shadow-jelly-card: 0 14px 28px rgba(255,150,180,0.12), 0 5px 0 var(--color-gray-border);
+  --font-family: "Baloo 2", "Nunito", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --color-gray-border: #F0D9E2;
+  --color-gray-bg: #FFF7FB;
+}
+
+/* 小：明亮糖果（默认即此套） */
+[data-theme="xiao"] {
+  --bg-gradient: linear-gradient(135deg, #F5F7FB 0%, #E4ECF7 100%);
+  --radius-xl: 30px;
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+  --shadow-jelly-sm: 0 4px 0 var(--color-gray-border);
+  --shadow-jelly-card: 0 12px 24px rgba(140,150,170,0.1), 0 4px 0 var(--color-gray-border);
+  --font-family: "Nunito", "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif;
+  --color-gray-border: #E5E5E5;
+  --color-gray-bg: #F7F7F7;
+}
+
+/* 中：清爽简约、克制、信息密度高 */
+[data-theme="zhong"] {
+  --bg-gradient: linear-gradient(135deg, #F7F8FA 0%, #EEF1F5 100%);
+  --radius-xl: 18px;
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 8px;
+  --shadow-jelly-sm: 0 2px 0 var(--color-gray-border);
+  --shadow-jelly-card: 0 6px 16px rgba(60,70,90,0.08), 0 2px 0 var(--color-gray-border);
+  --font-family: "Nunito", "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif;
+  --color-gray-border: #DFE3E8;
+  --color-gray-bg: #F4F6F8;
+  --color-text: #3A3F45;
+}
+
+/* ===================== 学科氛围（强调色，覆盖 primary/secondary）===================== */
+[data-subject="general"] { --color-primary:#58CC02; --color-primary-depth:#46A302; --color-secondary:#FF8A93; --color-secondary-depth:#E06C75; }
+[data-subject="chinese"] { --color-primary:#EA2B2B; --color-primary-depth:#C41E1E; --color-secondary:#FF6B6B; --color-secondary-depth:#D64545; }
+[data-subject="math"]    { --color-primary:#1899D6; --color-primary-depth:#107DB3; --color-secondary:#5DC8F5; --color-secondary-depth:#2BA3DE; }
+[data-subject="english"] { --color-primary:#B87CF8; --color-primary-depth:#965AD6; --color-secondary:#D9A6FF; --color-secondary-depth:#B87CF8; }
+[data-subject="science"] { --color-primary:#16B364; --color-primary-depth:#0E8C4A; --color-secondary:#5DD39E; --color-secondary-depth:#37B47E; }

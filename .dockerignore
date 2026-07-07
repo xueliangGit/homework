@@ -1,0 +1,23 @@
+# 依赖与构建产物（容器内重新安装/构建）
+node_modules
+dist
+
+# 数据库与运行数据（由卷持久化，勿打入镜像）
+.data
+
+# 版本控制与日志
+.git
+.gitignore
+*.log
+npm-debug.log*
+
+# 密钥（避免在镜像层留下明文）
+.env
+.env.*
+
+# Docker 自身与编辑器
+Dockerfile
+docker-compose.yml
+.dockerignore
+.vscode
+.idea
