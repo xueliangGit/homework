@@ -368,3 +368,12 @@ body {
 .jelly-mascot-breath {
   animation: mascot-breath 4s infinite alternate ease-in-out;
 }
+
+/* 严格限时最后 10 秒倒数脉冲提醒（P1-6） */
+@keyframes cw-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.04); }
+}
+.cw-pulse {
+  animation: cw-pulse 1s ease-in-out infinite;
+}

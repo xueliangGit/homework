@@ -141,8 +141,9 @@ export const getStudentExams = async (req: AuthRequest, res: Response) => {
     const result = studentExams.map(exam => {
       const submission = submissions.find(s => s.examId === exam.id && s.studentId === studentId);
 
-      // 班级名从全量 classes 查（而非仅当前所在班），转班后历史作业仍能显示所属班级名
+      // 班级名优先用答卷自身快照（转班/退班/班级被删后仍稳定），回退到 exam.classId 反查
       const teacherClass = classes.find(c => c.id === exam.classId);
+      const className = active?.className || (teacherClass ? teacherClass.name : '未知班级');
 
       // P2-8 订正：存在 redoOf 记录时，列表以订正版为准
       const redoSub = submission ? submissions.find(s => s.redoOf === submission.id) : undefined;
@@ -152,7 +153,7 @@ export const getStudentExams = async (req: AuthRequest, res: Response) => {
         id: exam.id,
         title: exam.title,
         classId: exam.classId,
-        className: teacherClass ? teacherClass.name : '未知班级',
+        className,
         createdAt: exam.createdAt,
         totalPages: exam.totalPages,
         // 状态：unstarted | drafting(仅存草稿未交) | submitted | graded
@@ -209,6 +210,15 @@ export const saveDraft = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ message: '您不属于该试卷对应的班级，无法保存草稿' });
     }
 
+    // 班级快照：同 submitExam，优先取学生真实所属班，回退 exam.classId
+    const studentClass = classes.find(
+      c => c.studentIds.includes(studentId) &&
+        (c.id === exam.classId || (exam.classIds || []).includes(c.id))
+    );
+    const snapClass = studentClass || examClass;
+    const snapClassId = snapClass?.id;
+    const snapClassName = snapClass?.name;
+
     // 权益校验：云端同步草稿为可收费功能，无 cloud_sync 权益则拦截（缺省视为已开通）
     const user = await db.findUserById(studentId);
     if (user && user.entitlements && user.entitlements.cloud_sync === false) {
@@ -231,6 +241,8 @@ export const saveDraft = async (req: AuthRequest, res: Response) => {
           answers: [],
           redoOf: draft.id,
           version: 1,
+          classId: snapClassId,
+          className: snapClassName,
         };
         submissions.push(redoSub);
       }
@@ -256,6 +268,8 @@ export const saveDraft = async (req: AuthRequest, res: Response) => {
       draft.status = 'draft';
       draft.lastSavedAt = now;
       draft.version = (typeof draft.version === 'number' ? draft.version : 0) + 1;
+      draft.classId = snapClassId;
+      draft.className = snapClassName;
       if (typeof currentPage === 'number') draft.draftPages = currentPage + 1;
     } else {
       draft = {
@@ -268,6 +282,8 @@ export const saveDraft = async (req: AuthRequest, res: Response) => {
         lastSavedAt: now,
         draftPages: typeof currentPage === 'number' ? currentPage + 1 : undefined,
         version: 1,
+        classId: snapClassId,
+        className: snapClassName,
       };
       submissions.push(draft);
     }
@@ -315,6 +331,16 @@ export const submitExam = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ message: '您不属于该试卷对应的班级，无法提交此答卷' });
     }
 
+    // 班级快照：优先取学生真实所属班（可能在 exam.classIds 多班之一），回退到 exam.classId。
+    // 转班/退班甚至班级被删后，历史作业仍能显示其提交时的所属班级名（P2 收尾项）。
+    const studentClass = classes.find(
+      c => c.studentIds.includes(studentId) &&
+        (c.id === exam.classId || (exam.classIds || []).includes(c.id))
+    );
+    const snapClass = studentClass || examClass;
+    const snapClassId = snapClass?.id;
+    const snapClassName = snapClass?.name;
+
     // 时限策略校验（截止时间 / 倒计时作答时长）
     if (exam.timePolicy || exam.closed) {
       const verdict = evaluateSubmitTime(exam, typeof startedAt === 'number' ? startedAt : undefined);
@@ -340,6 +366,8 @@ export const submitExam = async (req: AuthRequest, res: Response) => {
           answers: [],
           redoOf: submission.id,
           version: 1,
+          classId: snapClassId,
+          className: snapClassName,
         };
         submissions.push(redoSub);
       }
@@ -376,6 +404,8 @@ export const submitExam = async (req: AuthRequest, res: Response) => {
       submission.submittedAt = Date.now();
       submission.status = 'submitted';
       submission.version = (typeof submission.version === 'number' ? submission.version : 0) + 1;
+      submission.classId = snapClassId;
+      submission.className = snapClassName;
       // 迟交标记
       const v = evaluateSubmitTime(exam, typeof startedAt === 'number' ? startedAt : undefined);
       if (v.isLate) {
@@ -398,6 +428,8 @@ export const submitExam = async (req: AuthRequest, res: Response) => {
         submittedAt: now,
         answers: validAnswers,
         version: 1,
+        classId: snapClassId,
+        className: snapClassName,
         isLate: v.isLate,
         lateMs: v.isLate
           ? Math.max(0, now - (typeof exam.timePolicy?.deadline === 'number'

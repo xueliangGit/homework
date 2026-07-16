@@ -292,10 +292,18 @@ export const StudentWorkspace: React.FC<StudentWorkspaceProps> = ({
     return s <= e ? cur >= s && cur <= e : cur >= s || cur <= e;
   })();
 
-  // 严格模式且到点：自动收卷一次（不弹确认框）
+  // 严格模式且到点：自动收卷一次（带空卷保护，不静默交白卷）
   useEffect(() => {
     if (expired && isStrict && !autoSubmittedRef.current && !submitting) {
       autoSubmittedRef.current = true;
+      const validCount = Object.values(answersMap).filter(
+        (d) => typeof d === 'string' && d.trim() !== ''
+      ).length;
+      if (validCount === 0) {
+        // 时间到但一页都没写：保留作业本，提示老师补做，避免误收白卷
+        showToast('⏰ 时间到啦！不过你这一份还没写任何内容，已经为你保留，记得告诉老师补做哦～', 'info');
+        return;
+      }
       handleSubmit(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -355,9 +363,19 @@ export const StudentWorkspace: React.FC<StudentWorkspaceProps> = ({
   };
 
   const handleSubmit = async (auto = false) => {
+    const validCount = Object.values(answersMap).filter(
+      (d) => typeof d === 'string' && d.trim() !== ''
+    ).length;
+
     if (!auto) {
-      const ok = await confirmAsync('小朋友，确认全部写完，要把作业本交给老师批改了吗？🎉', '交作业');
-      if (!ok) return;
+      if (validCount === 0) {
+        // 空卷提醒：避免学生误交白卷（P1-6 缓冲）
+        const ok = await confirmAsync('你这一份好像一页都没写呢～确定要空空地交给老师吗？要不先回去画两笔？✏️', '还是交吧', '回去写');
+        if (!ok) return;
+      } else {
+        const ok = await confirmAsync('小朋友，确认全部写完，要把作业本交给老师批改了吗？🎉', '交作业');
+        if (!ok) return;
+      }
     }
 
     setSubmitting(true);
@@ -438,6 +456,18 @@ export const StudentWorkspace: React.FC<StudentWorkspaceProps> = ({
             >
               <Timer size={13} />
               {expired ? '时间到' : fmtRemaining(remainingMs)}
+            </div>
+          )}
+          {isStrict && remainingMs !== null && remainingMs > 0 && remainingMs <= 10_000 && (
+            <div
+              className="cw-pulse badge-jelly text-xs font-black py-1.5 px-3 flex items-center gap-1"
+              style={{
+                backgroundColor: '#FEE2E2',
+                color: '#DC2626',
+                borderColor: 'rgba(0,0,0,0.05)',
+              }}
+            >
+              ⏰ 只剩 {Math.ceil(remainingMs / 1000)} 秒！快检查有没有漏写的页～
             </div>
           )}
           {closed && (

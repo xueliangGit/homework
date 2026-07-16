@@ -68,6 +68,9 @@ export interface Submission {
   // —— 订正模式：graded 后学生重做，标记源自哪份已批改答卷 ——
   redoOf?: string;
   latePenaltyApplied?: number; // 批改时已扣除的迟交扣分
+  // —— 班级快照：提交/保存时记录学生所属班级，转班/退班甚至班级被删后历史作业仍能显示班级名 ——
+  classId?: string;
+  className?: string;
   // —— 完整版：多维能力评分 + 防伪分享码 ——
   dimensionScores?: { key: string; label: string; score: number; full: number }[];
   shareCode?: string;
