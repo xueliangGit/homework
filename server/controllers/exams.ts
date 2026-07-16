@@ -1,13 +1,31 @@
 import { Response } from 'express';
-import { db, Exam, Submission, User } from '../db';
+import { randomUUID } from 'crypto';
+import { db, Exam, Submission, User, Assignment } from '../db';
 import { AuthRequest } from '../middleware/auth';
 import { evaluateSubmitTime } from './assignments';
 
 const generateId = () => Math.random().toString(36).substring(2, 11);
 
+// 按 pageIndex 合并答案：覆盖已有页、删除空白页（canvasData 为空），便于分页自动存盘互不覆盖
+function mergeAnswers(
+  existing: { pageIndex: number; canvasData: string }[] = [],
+  incoming: { pageIndex: number; canvasData: string }[] = []
+): { pageIndex: number; canvasData: string }[] {
+  const map = new Map<number, string>();
+  for (const a of existing) {
+    if (a && typeof a.canvasData === 'string' && a.canvasData !== '') map.set(a.pageIndex, a.canvasData);
+  }
+  for (const a of incoming) {
+    if (!a || typeof a.canvasData !== 'string') continue;
+    if (a.canvasData === '') map.delete(a.pageIndex);
+    else map.set(a.pageIndex, a.canvasData);
+  }
+  return Array.from(map.entries()).map(([pageIndex, canvasData]) => ({ pageIndex, canvasData }));
+}
+
 // 1. 教师：发布试卷
 export const createExam = async (req: AuthRequest, res: Response) => {
-  const { title, classId, pages } = req.body;
+  const { title, classId, pages, timePolicy, theme, allowRedo, description } = req.body;
   const teacherId = req.user!.id;
 
   if (!title || !classId || !pages || !Array.isArray(pages) || pages.length === 0) {
@@ -21,6 +39,9 @@ export const createExam = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ message: '此班级不存在或您不是该班级的任课老师' });
     }
 
+    // 收敛发布模型：不论从「发布作业」还是「试卷库」入口，都写一条 linked assignment，
+    // 使 submitExam 的 allowRedo / 时限策略对两条路径产出一致的学生体验。
+    const assignmentId = randomUUID();
     const newExam: Exam = {
       id: generateId(),
       title,
@@ -29,11 +50,38 @@ export const createExam = async (req: AuthRequest, res: Response) => {
       createdAt: Date.now(),
       totalPages: pages.length,
       pages, // 页面 Base64 数据数组
+      timePolicy: timePolicy || undefined,
+      theme: theme || undefined,
+      assignmentId,
     };
 
     const exams = await db.getCollection('exams');
     exams.push(newExam);
     await db.saveCollection('exams', exams);
+
+    const assignment: Assignment = {
+      id: assignmentId,
+      paperId: '', // 「发布作业」入口无预存卷，留空
+      title,
+      teacherId,
+      classIds: [classId],
+      examIds: [newExam.id],
+      description: description?.trim() || '',
+      timePolicy: timePolicy || { mode: 'grace' },
+      theme: theme || undefined,
+      allowRedo: allowRedo ?? true,
+      status: 'published',
+      createdAt: Date.now(),
+    };
+    await db.insertOne('assignments', assignment);
+    await db.appendLog({
+      userId: teacherId,
+      role: req.user!.role,
+      action: 'publish_assignment',
+      targetType: 'assignment',
+      targetId: assignmentId,
+      detail: `${title} → 1 份作业 / 1 个班级（发布作业入口）`,
+    });
 
     // 响应排除大体积 pages（Base64 图片数组），前端列表无需原卷数据，减轻带宽
     const { pages: _omit, ...examSummary } = newExam;
@@ -76,15 +124,29 @@ export const getStudentExams = async (req: AuthRequest, res: Response) => {
     const classIds = studentClasses.map(c => c.id);
 
     const exams = await db.getCollection('exams');
-    const studentExams = exams.filter(e => classIds.includes(e.classId));
-
     const submissions = await db.getCollection('submissions');
-    
+
+    // 可见作业 = 当前所在班的作业 ∪ 该生所有历史提交(含草稿)涉及的作业。
+    // 这样转班/升班后，旧班里「写过/有草稿」的作业仍可见、可续写，不会丢历史。
+    const currentClassExamIds = exams
+      .filter(e => classIds.includes(e.classId))
+      .map(e => e.id);
+    const historyExamIds = submissions
+      .filter(s => s.studentId === studentId)
+      .map(s => s.examId);
+    const visibleExamIds = new Set([...currentClassExamIds, ...historyExamIds]);
+    const studentExams = exams.filter(e => visibleExamIds.has(e.id));
+
     // 联合查询，附带学生的完成进度
     const result = studentExams.map(exam => {
       const submission = submissions.find(s => s.examId === exam.id && s.studentId === studentId);
-      
-      const teacherClass = studentClasses.find(c => c.id === exam.classId);
+
+      // 班级名从全量 classes 查（而非仅当前所在班），转班后历史作业仍能显示所属班级名
+      const teacherClass = classes.find(c => c.id === exam.classId);
+
+      // P2-8 订正：存在 redoOf 记录时，列表以订正版为准
+      const redoSub = submission ? submissions.find(s => s.redoOf === submission.id) : undefined;
+      const active = redoSub || submission;
 
       return {
         id: exam.id,
@@ -93,14 +155,21 @@ export const getStudentExams = async (req: AuthRequest, res: Response) => {
         className: teacherClass ? teacherClass.name : '未知班级',
         createdAt: exam.createdAt,
         totalPages: exam.totalPages,
-        status: submission ? submission.status : 'unstarted', // 'unstarted' | 'submitted' | 'graded'
-        score: submission?.score,
-        comment: submission?.comment,
-        submissionId: submission?.id,
+        // 状态：unstarted | drafting(仅存草稿未交) | submitted | graded
+        status: active
+          ? active.status === 'draft' ? 'drafting' : active.status
+          : 'unstarted',
+        lastSavedAt: active?.lastSavedAt,
+        draftPages: active?.draftPages,
+        score: active?.score,
+        comment: active?.comment,
+        submissionId: active?.id,
+        redoSubmissionId: redoSub?.id,
+        canRedo: !!submission && submission.status === 'graded' && !redoSub,
         timePolicy: exam.timePolicy || null,
         closed: !!exam.closed,
         theme: exam.theme || null,
-        isLate: submission?.isLate || false,
+        isLate: active?.isLate || false,
       };
     });
 
@@ -111,14 +180,121 @@ export const getStudentExams = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// 3.5 学生：云端同步草稿（仅手动「同步到云端」触发，按 examId+studentId upsert，status='draft'）
+export const saveDraft = async (req: AuthRequest, res: Response) => {
+  const { examId } = req.params;
+  const { answers, currentPage, clientVersion, redo, force } = req.body; // answers: Array<{ pageIndex, canvasData }>
+  const studentId = req.user!.id;
+
+  if (!Array.isArray(answers)) {
+    return res.status(400).json({ message: '草稿笔迹格式不正确' });
+  }
+
+  try {
+    // 安全校验：学生必须属于该试卷对应的班级
+    const exams = await db.getCollection('exams');
+    const exam = exams.find(e => e.id === examId);
+    if (!exam) {
+      return res.status(404).json({ message: '未找到该试卷' });
+    }
+
+    const submissions = await db.getCollection('submissions');
+    // 已参与过该作业（有草稿/提交记录）→ 允许续写，不受转班/升班影响
+    const alreadyParticipated = submissions.some(
+      s => s.examId === examId && s.studentId === studentId
+    );
+    const classes = await db.getCollection('classes');
+    const examClass = classes.find(c => c.id === exam.classId);
+    if (!alreadyParticipated && (!examClass || !examClass.studentIds.includes(studentId))) {
+      return res.status(403).json({ message: '您不属于该试卷对应的班级，无法保存草稿' });
+    }
+
+    // 权益校验：云端同步草稿为可收费功能，无 cloud_sync 权益则拦截（缺省视为已开通）
+    const user = await db.findUserById(studentId);
+    if (user && user.entitlements && user.entitlements.cloud_sync === false) {
+      return res.status(402).json({ message: '☁️ 云端同步草稿是会员功能，请先开通后再同步哦' });
+    }
+
+    const now = Date.now();
+    let draft = submissions.find(s => s.examId === examId && s.studentId === studentId);
+
+    // P2-8 订正：graded 后带 redo=true 写订正草稿（复用 redoOf 记录），不改原批改答卷
+    if (draft && draft.status === 'graded' && redo === true) {
+      let redoSub = submissions.find(s => s.redoOf === draft!.id);
+      if (!redoSub) {
+        redoSub = {
+          id: generateId(),
+          examId,
+          studentId,
+          status: 'draft',
+          submittedAt: now,
+          answers: [],
+          redoOf: draft.id,
+          version: 1,
+        };
+        submissions.push(redoSub);
+      }
+      draft = redoSub;
+    }
+
+    if (draft) {
+      if (draft.status === 'graded' && redo !== true) {
+        return res.status(400).json({ message: '老师已经批改完成，无法再修改草稿' });
+      }
+      // P2-14 并发锁：他人已保存更新版本时提示冲突（除非强制覆盖）
+      if (
+        typeof draft.version === 'number' && typeof clientVersion === 'number' &&
+        clientVersion >= 0 && draft.version > clientVersion && !force
+      ) {
+        return res.status(409).json({
+          message: '检测到这份作业在别的设备上有更新的保存，是否仍用当前内容覆盖？',
+          conflict: true,
+          serverVersion: draft.version,
+        });
+      }
+      draft.answers = mergeAnswers(draft.answers, answers);
+      draft.status = 'draft';
+      draft.lastSavedAt = now;
+      draft.version = (typeof draft.version === 'number' ? draft.version : 0) + 1;
+      if (typeof currentPage === 'number') draft.draftPages = currentPage + 1;
+    } else {
+      draft = {
+        id: generateId(),
+        examId,
+        studentId,
+        status: 'draft',
+        submittedAt: now,
+        answers: mergeAnswers([], answers),
+        lastSavedAt: now,
+        draftPages: typeof currentPage === 'number' ? currentPage + 1 : undefined,
+        version: 1,
+      };
+      submissions.push(draft);
+    }
+
+    await db.saveCollection('submissions', submissions);
+    res.json({ message: '草稿已安全保存到云端 ☁️', data: { lastSavedAt: now, version: draft.version } });
+  } catch (error) {
+    console.error('保存草稿错误：', error);
+    res.status(500).json({ message: '草稿保存失败，请稍后再试' });
+  }
+};
+
 // 4. 学生：直接提交答卷（画布涂鸦）
 export const submitExam = async (req: AuthRequest, res: Response) => {
   const { examId } = req.params;
-  const { answers, startedAt } = req.body; // Array of { pageIndex: number, canvasData: string }
+  const { answers, startedAt, clientVersion, redo, force } = req.body; // Array of { pageIndex, canvasData }
   const studentId = req.user!.id;
 
   if (!answers || !Array.isArray(answers)) {
     return res.status(400).json({ message: '答卷涂鸦笔迹不能为空' });
+  }
+  // P2-7 拦截空卷：过滤出有效笔迹页，0 页则不接受提交
+  const validAnswers = answers.filter(
+    (a: any) => a && typeof a.canvasData === 'string' && a.canvasData !== ''
+  );
+  if (validAnswers.length === 0) {
+    return res.status(400).json({ message: '请先在本子上写点内容，再交给老师批改哦 ✏️' });
   }
 
   try {
@@ -128,9 +304,14 @@ export const submitExam = async (req: AuthRequest, res: Response) => {
     if (!exam) {
       return res.status(404).json({ message: '未找到该试卷' });
     }
+    // 安全校验：学生必须是当前班成员，或已参与过该作业（转班/升班后仍可续写与提交自己的草稿）
+    const submissions = await db.getCollection('submissions');
+    const alreadyParticipated = submissions.some(
+      s => s.examId === examId && s.studentId === studentId
+    );
     const classes = await db.getCollection('classes');
     const examClass = classes.find(c => c.id === exam.classId);
-    if (!examClass || !examClass.studentIds.includes(studentId)) {
+    if (!alreadyParticipated && (!examClass || !examClass.studentIds.includes(studentId))) {
       return res.status(403).json({ message: '您不属于该试卷对应的班级，无法提交此答卷' });
     }
 
@@ -142,23 +323,59 @@ export const submitExam = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    const submissions = await db.getCollection('submissions');
     let submission = submissions.find(s => s.examId === examId && s.studentId === studentId);
+
+    // P2-8 订正模式：老师已批改(graded)后，学生点「订正错题」携带 redo=true 重新作答。
+    // 不修改原批改答卷，而是新建/复用一条 redoOf 记录，保证原成绩留痕可查。
+    if (submission && submission.status === 'graded' && redo === true) {
+      let redoSub = submissions.find(s => s.redoOf === submission!.id);
+      if (!redoSub) {
+        const now = Date.now();
+        redoSub = {
+          id: generateId(),
+          examId,
+          studentId,
+          status: 'submitted',
+          submittedAt: now,
+          answers: [],
+          redoOf: submission.id,
+          version: 1,
+        };
+        submissions.push(redoSub);
+      }
+      submission = redoSub;
+    }
 
     // 不允许重复提交：若该作业配置禁止重做且已提交，则拦截
     if (submission) {
-      if (submission.status === 'graded') {
+      if (submission.status === 'graded' && redo !== true) {
         return res.status(400).json({ message: '老师已经完成批改，无法修改答卷' });
       }
-      // 查询作业是否允许重做
-      const assignments = await db.getCollection('assignments');
-      const assign = assignments.find((a: any) => a.examIds?.includes(examId));
-      if (assign && assign.allowRedo === false) {
-        return res.status(400).json({ message: '本作业不允许重复提交，请耐心等待老师批改' });
+      // P2-14 并发锁：他人已保存更新版本时提示冲突（除非强制覆盖）
+      if (
+        typeof submission.version === 'number' && typeof clientVersion === 'number' &&
+        clientVersion >= 0 && submission.version > clientVersion && !force
+      ) {
+        return res.status(409).json({
+          message: '检测到这份作业在别的设备上已经有更新的保存/提交，是否仍用当前设备的内容覆盖？',
+          conflict: true,
+          serverVersion: submission.version,
+        });
       }
-      submission.answers = answers;
+      // 草稿转正（draft→submitted）始终放行；仅对已提交的答卷才校验是否允许重做
+      if (submission.status === 'submitted') {
+        const assignments = await db.getCollection('assignments');
+        const assign = assignments.find((a: any) => a.examIds?.includes(examId));
+        if (assign && assign.allowRedo === false) {
+          return res.status(400).json({ message: '本作业不允许重复提交，请耐心等待老师批改' });
+        }
+      }
+      // 按页合并而非整体覆盖：避免跨设备交替作答后提交互相覆盖、丢页
+      // （mergeAnswers 会保留未重画的页，空白页视为擦除）
+      submission.answers = mergeAnswers(submission.answers, validAnswers);
       submission.submittedAt = Date.now();
       submission.status = 'submitted';
+      submission.version = (typeof submission.version === 'number' ? submission.version : 0) + 1;
       // 迟交标记
       const v = evaluateSubmitTime(exam, typeof startedAt === 'number' ? startedAt : undefined);
       if (v.isLate) {
@@ -179,7 +396,8 @@ export const submitExam = async (req: AuthRequest, res: Response) => {
         studentId,
         status: 'submitted',
         submittedAt: now,
-        answers,
+        answers: validAnswers,
+        version: 1,
         isLate: v.isLate,
         lateMs: v.isLate
           ? Math.max(0, now - (typeof exam.timePolicy?.deadline === 'number'
@@ -222,7 +440,12 @@ export const getSubmissionDetails = async (req: AuthRequest, res: Response) => {
     }
 
     const submissions = await db.getCollection('submissions');
-    const submission = submissions.find(s => s.examId === examId && s.studentId === studentId);
+    let submission = submissions.find(s => s.examId === examId && s.studentId === studentId);
+    // P2-8 订正模式：请求 ?redo=1 时优先返回订正记录
+    if (req.query.redo === '1' && submission) {
+      const redoSub = submissions.find(s => s.redoOf === submission!.id);
+      if (redoSub) submission = redoSub;
+    }
 
     // 校验鉴权：教师必须是该试卷的创建者，家长必须是该学生的家长，学生必须是本人
     if (role === 'teacher' && exam.teacherId !== userId) {
@@ -230,7 +453,12 @@ export const getSubmissionDetails = async (req: AuthRequest, res: Response) => {
     }
     if (role === 'parent') {
       const parent = await db.findUserById(userId);
-      if (!parent || parent.childId !== studentId) {
+      const childIds = parent?.childIds?.length
+        ? parent.childIds
+        : parent?.childId
+        ? [parent.childId]
+        : [];
+      if (!parent || !childIds.includes(studentId)) {
         return res.status(403).json({ message: '您无权查看非自己孩子的提交' });
       }
     }
@@ -293,7 +521,18 @@ export const gradeSubmission = async (req: AuthRequest, res: Response) => {
       ? dimensionScores
       : [{ key: 'total', label: '综合', score: Number(score), full: 100 }];
 
-    submission.score = Number(score);
+    // P2-11 迟交扣分：迟交且作业配置了迟交扣分，从总分中扣除（下限 0）
+    let finalScore = Number(score);
+    let penalty = 0;
+    if (submission.isLate && exam.timePolicy?.latePenalty && exam.timePolicy.latePenalty > 0) {
+      penalty = Math.min(exam.timePolicy.latePenalty, finalScore);
+      finalScore = Math.max(0, finalScore - penalty);
+      submission.latePenaltyApplied = penalty;
+    } else {
+      submission.latePenaltyApplied = 0;
+    }
+
+    submission.score = finalScore;
     submission.comment = comment || '';
     submission.teacherAnnotations = teacherAnnotations;
     submission.gradedAt = Date.now();
@@ -306,9 +545,12 @@ export const gradeSubmission = async (req: AuthRequest, res: Response) => {
       action: 'grade',
       targetType: 'exam',
       targetId: submission.examId,
-      detail: { examId: submission.examId, examTitle: exam.title, score: Number(score) },
+      detail: { examId: submission.examId, examTitle: exam.title, score: finalScore, latePenalty: penalty },
     });
-    res.json({ message: '批改完成！成绩已发布 📝', data: submission });
+    res.json({
+      message: penalty > 0 ? `批改完成！已扣除迟交 ${penalty} 分 📝` : '批改完成！成绩已发布 📝',
+      data: submission,
+    });
   } catch (error) {
     console.error('批改试卷错误：', error);
     res.status(500).json({ message: '批改失败，请稍后重试' });
@@ -322,26 +564,30 @@ export const getChildReports = async (req: AuthRequest, res: Response) => {
   try {
     const users = await db.getCollection('users');
     const parent = users.find(u => u.id === parentId);
-    if (!parent || !parent.childId) {
+    if (!parent || (!parent.childIds?.length && !parent.childId)) {
       return res.status(400).json({ message: '尚未绑定您的孩子，请先在账户设置中绑定' });
     }
-
-    const child = users.find(u => u.id === parent.childId);
-    const childName = child ? child.name : '您的孩子';
+    // 解析绑定孩子列表（兼容旧单孩 childId 字段）
+    const childIds = parent.childIds?.length
+      ? parent.childIds
+      : parent.childId
+      ? [parent.childId]
+      : [];
 
     const submissions = await db.getCollection('submissions');
-    const childSubmissions = submissions.filter(s => s.studentId === parent.childId);
+    const childSubmissions = submissions.filter(s => childIds.includes(s.studentId));
 
     const exams = await db.getCollection('exams');
 
-    // 拼装家长看的简易报表
+    // 拼装家长看的简易报表（支持多孩，每条带 childName/studentId 便于前端分组）
     const reports = childSubmissions.map(sub => {
+      const child = users.find(u => u.id === sub.studentId);
       const exam = exams.find(e => e.id === sub.examId);
       return {
         submissionId: sub.id,
         examId: sub.examId,
         studentId: sub.studentId,
-        childName,
+        childName: child ? child.name : '您的孩子',
         examTitle: exam ? exam.title : '未知试卷',
         status: sub.status,
         submittedAt: sub.submittedAt,
@@ -389,6 +635,30 @@ export const deleteExam = async (req: AuthRequest, res: Response) => {
   } catch (error) {
     console.error('撤回试卷错误：', error);
     res.status(500).json({ message: '撤回试卷失败，请稍后重试' });
+  }
+};
+
+// 9. 教师：获取各作业待批改/迟交统计（用于大厅角标与提醒）
+export const getTeacherStats = async (req: AuthRequest, res: Response) => {
+  const teacherId = req.user!.id;
+  try {
+    const exams = await db.getCollection('exams');
+    const submissions = await db.getCollection('submissions');
+    const myExams = exams.filter(e => e.teacherId === teacherId);
+    const stats: Record<string, { pending: number; late: number }> = {};
+    let totalPending = 0;
+    let totalLate = 0;
+    for (const exam of myExams) {
+      const subs = submissions.filter(s => s.examId === exam.id && s.status === 'submitted');
+      const late = subs.filter(s => s.isLate).length;
+      stats[exam.id] = { pending: subs.length, late };
+      totalPending += subs.length;
+      totalLate += late;
+    }
+    res.json({ stats, totalPending, totalLate });
+  } catch (error) {
+    console.error('获取教师统计错误：', error);
+    res.status(500).json({ message: '获取统计失败' });
   }
 };
 

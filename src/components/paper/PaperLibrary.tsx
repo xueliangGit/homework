@@ -3,6 +3,7 @@ import { papersApi, assignmentsApi, classesApi } from '../../api';
 import type { AssignmentItem, TimePolicy, SplitConfig } from '../../types';
 import { SEGMENT_LABELS, SUBJECT_LABELS, type Segment, type Subject } from '../../theme/ThemeContext';
 import { convertPdfToImages } from '../../utils/pdfParser';
+import { showToast, confirmAsync } from '../../utils/toast';
 
 const SEGMENTS: Segment[] = ['you', 'xiao', 'zhong'];
 const SUBJECTS: Subject[] = ['general', 'chinese', 'math', 'english', 'science'];
@@ -62,7 +63,7 @@ export const PaperLibrary: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       const res = tab === 'mine' ? await papersApi.list() : await papersApi.archived();
       setList(res.data || []);
     } catch (e: any) {
-      alert(e.message || '加载失败');
+      showToast(e.message || '加载失败', 'error');
     } finally {
       setLoading(false);
     }
@@ -74,7 +75,7 @@ export const PaperLibrary: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       const res = await assignmentsApi.list();
       setAssignments(res.data || []);
     } catch (e: any) {
-      alert(e.message || '加载作业失败');
+      showToast(e.message || '加载作业失败', 'error');
     } finally {
       setLoading(false);
     }
@@ -86,7 +87,8 @@ export const PaperLibrary: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   }, [tab]);
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm('确定移入回收站？')) return;
+    const ok = await confirmAsync('确定把这份试卷移入回收站吗？', '移入回收站', '再想想');
+    if (!ok) return;
     await papersApi.remove(id);
     loadPapers();
   };
@@ -98,14 +100,15 @@ export const PaperLibrary: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const handleToggleAssignment = async (a: AssignmentItem) => {
     try {
       if (a.status === 'published') {
-        if (!window.confirm(`关闭「${a.title}」？学生将不能再作答。`)) return;
+        const ok = await confirmAsync(`关闭「${a.title}」？学生将不能再作答。`, '关闭作业', '再想想');
+        if (!ok) return;
         await assignmentsApi.close(a.id);
       } else {
         await assignmentsApi.reopen(a.id);
       }
       loadAssignments();
     } catch (e: any) {
-      alert(e.message);
+      showToast(e.message || '操作失败', 'error');
     }
   };
 
@@ -336,7 +339,7 @@ const PublishModal: React.FC<{ paperId: string; onClose: () => void; onPublished
         setTitle(paper.data.title);
         setPageCount(paper.data.pages?.length || 0);
       } catch (e: any) {
-        alert(e.message);
+        showToast(e.message || '加载试卷失败', 'error');
       }
     })();
   }, [paperId]);
@@ -346,7 +349,7 @@ const PublishModal: React.FC<{ paperId: string; onClose: () => void; onPublished
   };
 
   const handlePublish = async () => {
-    if (selected.length === 0) return alert('请至少选择一个发布班级');
+    if (selected.length === 0) { showToast('请至少选择一个发布班级', 'warn'); return; }
     const tp: TimePolicy = { mode };
     if (deadline) {
       const ms = new Date(deadline).getTime();
@@ -378,10 +381,10 @@ const PublishModal: React.FC<{ paperId: string; onClose: () => void; onPublished
     setSaving(true);
     try {
       const res = await assignmentsApi.publish(body);
-      alert(res.message || '已发布');
+      showToast(res.message || '已发布', 'success');
       onPublished();
     } catch (e: any) {
-      alert(e.message);
+      showToast(e.message || '发布失败', 'error');
     } finally {
       setSaving(false);
     }
@@ -677,14 +680,14 @@ const PaperEditor: React.FC<{ paperId: string | null; onClose: () => void; onSav
         setSubject(p.subject);
         setPages(p.pages || []);
       } catch (e: any) {
-        alert(e.message);
+        showToast(e.message || '加载失败', 'error');
       }
     })();
   }, [paperId]);
 
   const handleSave = async () => {
-    if (!title.trim()) return alert('请填写试卷标题');
-    if (pages.length === 0) return alert('请至少添加一页内容');
+    if (!title.trim()) { showToast('请填写试卷标题', 'warn'); return; }
+    if (pages.length === 0) { showToast('请至少添加一页内容', 'warn'); return; }
     setSaving(true);
     try {
       if (paperId) {
@@ -694,7 +697,7 @@ const PaperEditor: React.FC<{ paperId: string | null; onClose: () => void; onSav
       }
       onSaved();
     } catch (e: any) {
-      alert(e.message);
+      showToast(e.message || '保存失败', 'error');
     } finally {
       setSaving(false);
     }
@@ -852,7 +855,7 @@ const DrawSource: React.FC<{ onAddPage: (dataUrl: string) => void }> = ({ onAddP
   };
   const savePage = () => {
     const c = canvasRef.current!;
-    if (c.toDataURL().length < 5000) return alert('请先画点内容');
+    if (c.toDataURL().length < 5000) { showToast('请先画点内容', 'warn'); return; }
     onAddPage(c.toDataURL('image/png'));
     clear();
   };

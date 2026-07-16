@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { db, Class, User } from '../db';
+import { db, Class, User, generateStudentUsername } from '../db';
 import { AuthRequest } from '../middleware/auth';
 
 // 教师：导出某班级的成绩汇总（供前端生成 Excel / PDF）
@@ -117,12 +117,8 @@ export const getClasses = async (req: AuthRequest, res: Response) => {
 
 export const addStudentToClass = async (req: AuthRequest, res: Response) => {
   const { classId } = req.params;
-  const { name, username, password } = req.body;
+  const { name, username, password, addExisting } = req.body;
   const teacherId = req.user!.id;
-
-  if (!name || !username || !password) {
-    return res.status(400).json({ message: '请提供学生姓名、学号账号和登录密码' });
-  }
 
   try {
     const classes = await db.getCollection('classes');
@@ -133,22 +129,51 @@ export const addStudentToClass = async (req: AuthRequest, res: Response) => {
     }
 
     const users = await db.getCollection('users');
-    const existUser = users.find(u => u.username === username);
+
+    // 学号留空时自动生成全局唯一学号（P2-学生账号体验）
+    let finalUsername = (username || '').trim();
+    if (!finalUsername) {
+      finalUsername = generateStudentUsername(users);
+    }
+
+    const existUser = users.find(u => u.username === finalUsername);
 
     if (existUser) {
-      return res.status(400).json({ message: '该学生账号/学号已被注册，请更换一个唯一的账号' });
+      if (existUser.role !== 'student') {
+        return res.status(400).json({ message: '该账号不是学生账号，无法加入班级' });
+      }
+      if (addExisting) {
+        // 显式「并入已有账号」：允许跨班（如兴趣班）共用同一学生
+        if (targetClass.studentIds.includes(existUser.id)) {
+          return res.status(400).json({ message: '该学生已经在班级里啦，无需重复添加' });
+        }
+        targetClass.studentIds.push(existUser.id);
+        await db.saveCollection('classes', classes);
+        return res.status(200).json({
+          message: `已将已有学生【${existUser.name}】并入本班！该生现在同时属于多个班级 ✅`,
+          student: { id: existUser.id, username: existUser.username, name: existUser.name },
+        });
+      }
+      // 新建账号却撞号：明确报错，不再静默并入（P2-学生账号体验）
+      return res.status(400).json({
+        message: `学号「${finalUsername}」已被其他同学占用啦，请换一个，或勾选"已有账号"并入本班`,
+      });
     }
 
     // 1. 创建学生用户（同时生成 6 位绑定码，供家长安全绑定，防止串绑）
+    if (!name || !password) {
+      return res.status(400).json({ message: '请提供学生姓名和登录密码' });
+    }
     const passwordHash = await bcrypt.hash(password, 10);
     const bindCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     const newStudent: User = {
       id: generateId(),
-      username,
+      username: finalUsername,
       passwordHash,
       role: 'student',
       name,
       bindCode,
+      mustChangePassword: true, // P2-15 首次登录强制改密
     };
 
     users.push(newStudent);
@@ -158,8 +183,9 @@ export const addStudentToClass = async (req: AuthRequest, res: Response) => {
     targetClass.studentIds.push(newStudent.id);
     await db.saveCollection('classes', classes);
 
+    const autoGen = finalUsername !== (username || '').trim();
     res.status(201).json({
-      message: `成功为学生【${name}】创建账号并加入班级！`,
+      message: `成功为学生【${name}】创建账号并加入班级！${autoGen ? `系统已自动生成学号：${finalUsername}` : ''}`,
       student: {
         id: newStudent.id,
         username: newStudent.username,
@@ -169,5 +195,29 @@ export const addStudentToClass = async (req: AuthRequest, res: Response) => {
   } catch (error) {
     console.error('添加学生错误：', error);
     res.status(500).json({ message: '添加学生失败，请稍后重试' });
+  }
+};
+
+// 教师：将学生移出班级（退班）。仅移除班级关联，不删除学生账号。
+export const removeStudentFromClass = async (req: AuthRequest, res: Response) => {
+  const { classId, studentId } = req.params;
+  const teacherId = req.user!.id;
+
+  try {
+    const classes = await db.getCollection('classes');
+    const targetClass = classes.find(c => c.id === classId && c.teacherId === teacherId);
+    if (!targetClass) {
+      return res.status(404).json({ message: '未找到指定班级，或您不是该班级的任课老师' });
+    }
+    if (!targetClass.studentIds.includes(studentId)) {
+      return res.status(404).json({ message: '该学生不在本班级中' });
+    }
+
+    targetClass.studentIds = targetClass.studentIds.filter(id => id !== studentId);
+    await db.saveCollection('classes', classes);
+    res.json({ message: '已将学生移出本班级 ✅' });
+  } catch (error) {
+    console.error('移除学生错误：', error);
+    res.status(500).json({ message: '移出学生失败，请稍后重试' });
   }
 };

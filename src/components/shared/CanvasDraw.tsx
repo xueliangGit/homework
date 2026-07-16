@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { CanvasToolbar } from './CanvasToolbar';
+import { confirmAsync } from '../../utils/toast';
 
 interface CanvasDrawProps {
   backgroundImage?: string; // 试卷背景图片 (Base64 或 URL)
@@ -377,8 +378,8 @@ export const CanvasDraw: React.FC<CanvasDrawProps> = ({
     };
   };
 
-  const handleClear = () => {
-    if (window.confirm('小朋友，确认要清空这一页的全部写字内容吗？')) {
+  const handleClear = async () => {
+    if (await confirmAsync('小朋友，确认要清空这一页的全部写字内容吗？', '清空', '保留')) {
       haptic([10]);
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');

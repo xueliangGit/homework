@@ -42,7 +42,10 @@ async function request<T>(url: string, options: RequestOptions = {}): Promise<T>
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(data.message || '网络连接有些不听话，请稍后再试一次吧！');
+    const err: any = new Error(data.message || '网络连接有些不听话，请稍后再试一次吧！');
+    err.status = response.status;
+    err.data = data;
+    throw err;
   }
 
   return data as T;
@@ -85,9 +88,45 @@ export const assignmentsApi = {
 export const classesApi = {
   list: () => api.get<any[]>('/api/classes'),
   exportGrades: (classId: string) => api.get<{ data: { className: string; rows: any[] } }>(`/api/classes/${classId}/export`),
+  // 将已有学生并入本班（多班/跨兴趣班场景）：仅传学号，显式标记 addExisting
+  addExisting: (classId: string, username: string) => api.post<any>(`/api/classes/${classId}/students`, { username, addExisting: true }),
+  // 将学生移出班级（退班）
+  removeStudent: (classId: string, studentId: string) => api.delete(`/api/classes/${classId}/students/${studentId}`),
+};
+
+// 学生作答：提交 / 云端草稿自动存盘
+export const examsApi = {
+  submit: (examId: string, body: any) => api.post<any>(`/api/exams/${examId}/submit`, body),
+  saveDraft: (examId: string, body: any) => api.post<any>(`/api/exams/${examId}/draft`, body),
+};
+
+// 鉴权：改密 / 找回（P2-15）
+export const authApi = {
+  changePassword: (body: { oldPassword: string; newPassword: string }) =>
+    api.post<any>('/api/auth/change-password', body),
+  resetPassword: (body: { username: string; bindCode: string; newPassword: string }) =>
+    api.post<any>('/api/auth/reset-password', body),
+};
+
+// 教师作业统计（待批改 / 迟交角标，P2-12）
+export const statsApi = {
+  teacher: () =>
+    api.get<{
+      stats: Record<string, { pending: number; late: number }>;
+      totalPending: number;
+      totalLate: number;
+    }>('/api/teacher/stats'),
 };
 
 // 全链路操作留痕
 export const logsApi = {
   list: () => api.get<{ data: any[] }>('/api/logs'),
+};
+
+// 学号：查重 + 自动生成建议（教师端添加学生用，P2-学生账号体验）
+export const usersApi = {
+  checkUsername: (username: string) =>
+    api.get<{ data: { available: boolean } }>('/api/users/check-username', { username }),
+  suggestUsername: () =>
+    api.get<{ data: { username: string } }>('/api/users/suggest-username'),
 };

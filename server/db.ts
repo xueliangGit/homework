@@ -10,9 +10,13 @@ export interface User {
   passwordHash: string;
   role: 'teacher' | 'student' | 'parent';
   name: string;
-  childId?: string; // 仅限家长，绑定孩子的 studentId
+  childId?: string; // 【已废弃】仅用于兼容旧数据（单孩），新逻辑请用 childIds
+  childIds?: string[]; // 仅限家长，绑定孩子的 studentId 列表（支持二孩/多孩）
   bindCode?: string; // 仅限学生，供家长绑定校验（由系统生成、教师下发）
   themePref?: string; // 用户偏好的显示主题（不影响作业内容）
+  // 功能权益开关：用于控制「云端同步草稿」等可能收费的能力。缺省视为已开通。
+  entitlements?: { cloud_sync?: boolean };
+  mustChangePassword?: boolean; // 学生首次登录后强制改密（初始密码由老师下发）
 }
 
 export interface Class {
@@ -42,7 +46,7 @@ export interface Submission {
   id: string;
   examId: string;
   studentId: string;
-  status: 'submitted' | 'graded';
+  status: 'draft' | 'submitted' | 'graded';
   submittedAt: number;
   gradedAt?: number;
   score?: number;
@@ -52,10 +56,18 @@ export interface Submission {
   // —— 留痕扩展字段 ——
   firstEnteredAt?: number;
   durationMs?: number;
+  // —— 草稿箱：云端进度保存 ——
+  lastSavedAt?: number; // 最近一次自动存盘时间戳
+  draftPages?: number; // 草稿已完成到第几页（1-based），用于草稿箱展示进度
   isLate?: boolean;
   lateMs?: number;
   device?: string;
   ip?: string;
+  // —— 并发安全：每次保存自增，用于多设备提交冲突检测 ——
+  version?: number;
+  // —— 订正模式：graded 后学生重做，标记源自哪份已批改答卷 ——
+  redoOf?: string;
+  latePenaltyApplied?: number; // 批改时已扣除的迟交扣分
   // —— 完整版：多维能力评分 + 防伪分享码 ——
   dimensionScores?: { key: string; label: string; score: number; full: number }[];
   shareCode?: string;
@@ -264,3 +276,12 @@ class SqliteDatabase {
 }
 
 export const db = new SqliteDatabase();
+
+// 生成一个全局唯一的学号（stu + 4 位数字，确保不与现有用户冲突）
+export function generateStudentUsername(users: { username?: string }[]): string {
+  for (let i = 0; i < 30; i++) {
+    const cand = 'stu' + Math.floor(1000 + Math.random() * 9000); // stu1000 ~ stu9999
+    if (!users.some((u) => u.username === cand)) return cand;
+  }
+  return 'stu' + Date.now().toString().slice(-6);
+}

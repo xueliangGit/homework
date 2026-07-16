@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import type { Class, Exam } from '../../types';
 import { Users, Plus, Upload, Edit3, ClipboardList } from 'lucide-react';
 import { convertPdfToImages } from '../../utils/pdfParser';
-import { api, classesApi } from '../../api';
+import { api, classesApi, statsApi, usersApi } from '../../api';
+import { confirmAsync } from '../../utils/toast';
 import * as XLSX from 'xlsx';
 
 interface TeacherDashboardProps {
@@ -28,6 +29,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const [studentName, setStudentName] = useState<string>('');
   const [studentUsername, setStudentUsername] = useState<string>('');
   const [studentPassword, setStudentPassword] = useState<string>('');
+  const [addExistingMode, setAddExistingMode] = useState<boolean>(false);
+  // 学号实时查重状态（P2-学生账号体验）
+  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'taken' | 'ok'>('idle');
+
+  // 批量粘贴学号模式
+  const [batchMode, setBatchMode] = useState<boolean>(false);
+  const [batchText, setBatchText] = useState<string>('');
+  // 转班：当前正在转班的学生 + 目标班级
+  const [transferStudentId, setTransferStudentId] = useState<string>('');
+  const [transferTargetClassId, setTransferTargetClassId] = useState<string>('');
 
   // 发卷表单
   const [examTitle, setExamTitle] = useState<string>('');
@@ -40,6 +51,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  // P2-12 教师待批改/迟交统计（用于大厅角标与提醒）
+  const [stats, setStats] = useState<{ stats: Record<string, { pending: number; late: number }>; totalPending: number; totalLate: number }>({ stats: {}, totalPending: 0, totalLate: 0 });
 
   // 获取该教师的所有班级
   const loadClasses = async () => {
@@ -54,8 +67,19 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
   };
 
+  // P2-12 加载待批改/迟交统计（每次进入控制台刷新一次）
+  const loadStats = async () => {
+    try {
+      const data = await statsApi.teacher();
+      setStats(data);
+    } catch {
+      /* 统计失败不影响主流程 */
+    }
+  };
+
   useEffect(() => {
     loadClasses();
+    loadStats();
   }, []);
 
   // 切换班级时，获取该班级的试题列表
@@ -122,15 +146,15 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const handleWithdrawExam = async (examId: string) => {
     const exam = examsList.find(e => e.id === examId);
     if (!exam) return;
-    
-    if (window.confirm(`老师，确认要撤回试卷【${exam.title}】吗？\n撤回后此试卷将被永久撤销，学生将无法继续答题！🗑️`)) {
-      try {
-        await api.delete(`/api/exams/${examId}`);
-        setMessage({ type: 'success', text: `成功撤回试卷：${exam.title}！🗑️` });
-        loadClassExams(activeClassId);
-      } catch (err: any) {
-        setMessage({ type: 'error', text: err.message || '撤回试卷失败，请稍后重试' });
-      }
+
+    const ok = await confirmAsync(`老师，确认要撤回试卷【${exam.title}】吗？\n撤回后此试卷将被永久撤销，学生将无法继续答题！🗑️`);
+    if (!ok) return;
+    try {
+      await api.delete(`/api/exams/${examId}`);
+      setMessage({ type: 'success', text: `成功撤回试卷：${exam.title}！🗑️` });
+      loadClassExams(activeClassId);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || '撤回试卷失败，请稍后重试' });
     }
   };
 
@@ -149,26 +173,124 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
   };
 
+  // 学号实时查重：输入防抖后调用后端校验（P2-学生账号体验）
+  useEffect(() => {
+    if (addExistingMode || !studentUsername.trim()) {
+      setUsernameStatus('idle');
+      return;
+    }
+    setUsernameStatus('checking');
+    const t = setTimeout(async () => {
+      try {
+        const res = await usersApi.checkUsername(studentUsername.trim());
+        setUsernameStatus(res.data.available ? 'ok' : 'taken');
+      } catch {
+        setUsernameStatus('idle');
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [studentUsername, addExistingMode]);
+
+  // 🎲 一键自动生成唯一学号（P2-学生账号体验）
+  const handleSuggestUsername = async () => {
+    try {
+      const res = await usersApi.suggestUsername();
+      setStudentUsername(res.data.username);
+      setUsernameStatus('ok');
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || '自动生成学号失败，请稍后再试' });
+    }
+  };
+
   // 在班级里添加学生
   const handleAddStudent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!studentName || !studentUsername || !studentPassword || !activeClassId) return;
+    if (!activeClassId) return;
+    if (addExistingMode) {
+      if (!studentUsername.trim()) return;
+    } else {
+      if (!studentName.trim() || !studentPassword.trim()) return;
+      // 新建账号模式下，若学号被占用则直接拦截（服务端也会再校验一次）
+      if (usernameStatus === 'taken') return;
+    }
 
     try {
-      await api.post(`/api/classes/${activeClassId}/students`, {
+      const res = await api.post<any>(`/api/classes/${activeClassId}/students`, {
         name: studentName,
         username: studentUsername,
         password: studentPassword,
+        addExisting: addExistingMode,
       });
 
-      setMessage({ type: 'success', text: `成功将学生【${studentName}】添加至班级！并已创建账号。` });
+      const finalUsername = res?.data?.student?.username || studentUsername;
+      setMessage({
+        type: 'success',
+        text: addExistingMode
+          ? `已将已有学生【${studentUsername}】并入本班！该生现在同时属于多个班级 ✅`
+          : `成功将学生【${studentName}】添加至班级！学号：${finalUsername}（请告知学生，首次登录需改密）`,
+      });
       setStudentName('');
       setStudentUsername('');
       setStudentPassword('');
+      setAddExistingMode(false);
+      setUsernameStatus('idle');
       loadClasses();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message });
     }
+  };
+
+  // 将学生移出本班级（退班）
+  const handleRemoveStudent = async (studentId: string) => {
+    const stu = activeClass?.students?.find(s => s.id === studentId);
+    const ok = await confirmAsync(`确认将学生【${stu?.name || studentId}】移出本班级吗？`);
+    if (!ok) return;
+    try {
+      await classesApi.removeStudent(activeClassId, studentId);
+      setMessage({ type: 'success', text: `已将学生【${stu?.name || ''}】移出本班` });
+      loadClasses();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || '移出失败，请重试' });
+    }
+  };
+
+  // 转班：从原班移除 + 并入目标班（一键升班/调班）
+  const handleTransferConfirm = async () => {
+    if (!transferStudentId || !transferTargetClassId || !activeClassId) return;
+    const stu = activeClass?.students?.find(s => s.id === transferStudentId);
+    const targetName = classes.find(c => c.id === transferTargetClassId)?.name || '';
+    try {
+      await classesApi.removeStudent(activeClassId, transferStudentId); // 原班移除
+      await classesApi.addExisting(transferTargetClassId, stu?.username || ''); // 并入目标班
+      setMessage({ type: 'success', text: `✅ 已把【${stu?.name || ''}】从本班转入【${targetName}】` });
+      setTransferStudentId('');
+      setTransferTargetClassId('');
+      loadClasses();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || '转班失败，请重试' });
+    }
+  };
+
+  // 批量粘贴学号：逐行并入本班（适用于已建好账号、按学号批量入班场景）
+  const handleBatchAdd = async () => {
+    if (!batchText.trim() || !activeClassId) return;
+    const lines = batchText.split('\n').map(l => l.trim()).filter(Boolean);
+    let ok = 0;
+    let fail = 0;
+    for (const username of lines) {
+      try {
+        await classesApi.addExisting(activeClassId, username);
+        ok += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+    setMessage({
+      type: 'success',
+      text: `📋 批量并入完成：成功 ${ok} 人${fail ? `，失败 ${fail} 人（可能已在本班或非学生账号）` : ''}`,
+    });
+    setBatchText('');
+    loadClasses();
   };
 
   // 魔法转换：处理图片与 PDF 文件的读取并统一解析为 Base64 PNG 图片集
@@ -360,17 +482,72 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto pr-1">
                 {activeClass.students && activeClass.students.length > 0 ? (
                   activeClass.students.map((student: any) => (
-                    <div 
-                      key={student.id} 
-                      className="p-3 border border-gray-border rounded-xl bg-gray-50 flex justify-between items-center text-xs font-black text-gray-700"
+                    <div
+                      key={student.id}
+                      className="p-3 border border-gray-border rounded-xl bg-gray-50 flex flex-col gap-2 text-xs font-black text-gray-700"
                     >
-                      <div className="flex flex-col gap-0.5">
-                        <span>{student.name}</span>
-                        <span className="text-[10px] text-gray-400 font-bold">学号: {student.username}</span>
+                      <div className="flex justify-between items-center gap-2">
+                        <div className="flex flex-col gap-0.5">
+                          <span>{student.name}</span>
+                          <span className="text-[10px] text-gray-400 font-bold">学号: {student.username}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-extrabold px-2 py-1 rounded-lg bg-purple-50 text-purple-600 border border-purple-200" title="将此绑定码发给孩子家长用于安全绑定">
+                            绑定码: {student.bindCode || '—'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveStudent(student.id)}
+                            className="btn-3d text-[10px] py-1 px-2"
+                            style={{ backgroundColor: '#FEE2E2', color: '#DC2626', boxShadow: '0 2px 0 #FCA5A5' }}
+                            title="移出本班"
+                          >
+                            🚪 移出
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTransferStudentId(transferStudentId === student.id ? '' : student.id);
+                              setTransferTargetClassId('');
+                            }}
+                            className="btn-3d text-[10px] py-1 px-2"
+                            style={{ backgroundColor: '#F3E8FF', color: '#7E22CE', boxShadow: '0 2px 0 #D8B4FE' }}
+                            title="转到其他班级"
+                          >
+                            🔄 {transferStudentId === student.id ? '收起' : '转班'}
+                          </button>
+                        </div>
                       </div>
-                      <span className="text-[10px] font-extrabold px-2 py-1 rounded-lg bg-purple-50 text-purple-600 border border-purple-200" title="将此绑定码发给孩子家长用于安全绑定">
-                        绑定码: {student.bindCode || '—'}
-                      </span>
+
+                      {transferStudentId === student.id && (
+                        <div className="flex items-center gap-2 border-t border-dashed border-gray-300 pt-2">
+                          <select
+                            value={transferTargetClassId}
+                            onChange={(e) => setTransferTargetClassId(e.target.value)}
+                            className="input-jelly text-xs py-1.5 flex-1 bg-white"
+                          >
+                            <option value="">选择目标班级…</option>
+                            {classes.filter(c => c.id !== activeClassId).map(c => (
+                              <option key={c.id} value={c.id}>{c.name}</option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={handleTransferConfirm}
+                            disabled={!transferTargetClassId}
+                            className="btn-3d btn-3d-purple text-[10px] py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            确认转班
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setTransferStudentId(''); setTransferTargetClassId(''); }}
+                            className="btn-3d text-[10px] py-1.5 px-3"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))
                 ) : (
@@ -379,42 +556,120 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               </div>
 
               {/* 添加学生表单 */}
-              <form onSubmit={handleAddStudent} className="flex flex-col gap-2.5 border-t border-dashed border-gray-300 pt-4 mt-2">
-                <span className="text-[10px] font-extrabold text-gray-400">快速添加学生账号：</span>
-                <input
-                  type="text"
-                  placeholder="姓名 (如: 张大伟)"
-                  value={studentName}
-                  onChange={(e) => setStudentName(e.target.value)}
-                  className="input-jelly text-xs py-2"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="登录学号账号 (如: dawei01)"
-                  value={studentUsername}
-                  onChange={(e) => setStudentUsername(e.target.value)}
-                  className="input-jelly text-xs py-2"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="初始登录密码"
-                  value={studentPassword}
-                  onChange={(e) => setStudentPassword(e.target.value)}
-                  className="input-jelly text-xs py-2"
-                  required
-                />
-                <button 
-                  type="submit" 
-                  className="btn-3d btn-3d-blue text-xs py-2 font-black mt-1"
-                  style={{
-                    boxShadow: '0 3px 0 var(--color-blue-depth)',
-                  }}
-                >
-                  <span>加入本班 🎒</span>
-                </button>
-              </form>
+              {batchMode ? (
+                <form onSubmit={(e) => e.preventDefault()} className="flex flex-col gap-2.5 border-t border-dashed border-gray-300 pt-4 mt-2">
+                  <label className="flex items-center gap-2 text-[10px] font-extrabold text-gray-500 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={batchMode}
+                      onChange={(e) => setBatchMode(e.target.checked)}
+                      className="w-3.5 h-3.5 accent-blue-500"
+                    />
+                    📋 批量粘贴学号（每行一个，自动并入本班）
+                  </label>
+                  <textarea
+                    value={batchText}
+                    onChange={(e) => setBatchText(e.target.value)}
+                    placeholder={'每行粘贴一个学号，如：\ndawei01\nlili02\nxiaoming03'}
+                    className="input-jelly text-xs py-2 h-24 resize-none"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleBatchAdd}
+                      disabled={!batchText.trim()}
+                      className="btn-3d btn-3d-blue text-xs py-2 font-black flex-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{ boxShadow: '0 3px 0 var(--color-blue-depth)' }}
+                    >
+                      批量并入本班 🎒
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBatchMode(false)}
+                      className="btn-3d text-xs py-2 px-3"
+                    >
+                      单条
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form onSubmit={handleAddStudent} className="flex flex-col gap-2.5 border-t border-dashed border-gray-300 pt-4 mt-2">
+                  <label className="flex items-center gap-2 text-[10px] font-extrabold text-gray-500 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={addExistingMode}
+                      onChange={(e) => setAddExistingMode(e.target.checked)}
+                      className="w-3.5 h-3.5 accent-blue-500"
+                    />
+                    该生已有账号（仅填学号即可并入本班，如跨兴趣班）
+                  </label>
+                  <label className="flex items-center gap-2 text-[10px] font-extrabold text-gray-500 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={batchMode}
+                      onChange={(e) => setBatchMode(e.target.checked)}
+                      className="w-3.5 h-3.5 accent-blue-500"
+                    />
+                    📋 切换批量粘贴学号模式
+                  </label>
+                  {!addExistingMode && (
+                    <input
+                      type="text"
+                      placeholder="姓名 (如: 张大伟)"
+                      value={studentName}
+                      onChange={(e) => setStudentName(e.target.value)}
+                      className="input-jelly text-xs py-2"
+                    />
+                  )}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="登录学号 (留空将自动生成，或点🎲)"
+                      value={studentUsername}
+                      onChange={(e) => setStudentUsername(e.target.value)}
+                      className="input-jelly text-xs py-2 flex-1"
+                    />
+                    {!addExistingMode && (
+                      <button
+                        type="button"
+                        onClick={handleSuggestUsername}
+                        title="自动生成一个唯一学号"
+                        className="btn-3d text-xs py-2 px-3 whitespace-nowrap"
+                      >
+                        🎲 自动生成
+                      </button>
+                    )}
+                  </div>
+                  {!addExistingMode && usernameStatus === 'checking' && (
+                    <span className="text-[10px] text-gray-400 font-bold">正在检查学号是否可用…</span>
+                  )}
+                  {!addExistingMode && usernameStatus === 'taken' && (
+                    <span className="text-[10px] text-red-500 font-bold">⚠️ 该学号已被占用，请换一个或点🎲</span>
+                  )}
+                  {!addExistingMode && usernameStatus === 'ok' && studentUsername.trim() && (
+                    <span className="text-[10px] text-green-600 font-bold">✓ 学号可用</span>
+                  )}
+                  {!addExistingMode && (
+                    <input
+                      type="text"
+                      placeholder="初始登录密码"
+                      value={studentPassword}
+                      onChange={(e) => setStudentPassword(e.target.value)}
+                      className="input-jelly text-xs py-2"
+                    />
+                  )}
+                  <button 
+                    type="submit" 
+                    disabled={!addExistingMode && usernameStatus === 'taken'}
+                    className="btn-3d btn-3d-blue text-xs py-2 font-black mt-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{
+                      boxShadow: '0 3px 0 var(--color-blue-depth)',
+                    }}
+                  >
+                    <span>{addExistingMode ? '并入本班 🎒' : '加入本班 🎒'}</span>
+                  </button>
+                </form>
+              )}
             </>
           ) : (
             <span className="text-xs text-gray-400 font-extrabold text-center py-12">请先在上方建立一个属于您的班级吧！🎓</span>
@@ -498,6 +753,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           <h3 className="text-md font-black border-b-2 border-gray-border pb-3 flex items-center gap-2 text-gray-700">
             <ClipboardList size={20} className="text-yellow-500" />
             <span>试卷与批改中心</span>
+            {(stats.totalPending > 0 || stats.totalLate > 0) && (
+              <span className="badge-jelly text-[10px] bg-amber-100 text-amber-700 border-amber-200">
+                待批改 {stats.totalPending} ｜ 迟交 {stats.totalLate}
+              </span>
+            )}
           </h3>
 
           {examsList.length > 0 ? (
@@ -511,7 +771,9 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     className="input-jelly text-xs py-2 bg-white flex-1"
                   >
                     {examsList.map(e => (
-                      <option key={e.id} value={e.id}>{e.title}</option>
+                      <option key={e.id} value={e.id}>
+                        {e.title}{stats.stats[e.id]?.pending ? ` (待批${stats.stats[e.id].pending})` : ''}
+                      </option>
                     ))}
                   </select>
                   {activeExamId && (
@@ -544,7 +806,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     if (sub) {
                       if (sub.status === 'submitted') {
                         badgeBg = 'bg-yellow-50 text-yellow-600 border-yellow-200';
-                        statusLabel = '待批改 🖍️';
+                        statusLabel = sub.isLate ? '待批改·迟 ⏰🖍️' : '待批改 🖍️';
                       } else if (sub.status === 'graded') {
                         badgeBg = 'bg-green-50 text-green-600 border-green-200';
                         statusLabel = `已批改: ${sub.score}分 🎉`;

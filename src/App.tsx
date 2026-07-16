@@ -14,6 +14,8 @@ import { useTheme, SEGMENT_LABELS } from './theme/ThemeContext';
 import { PaperLibrary } from './components/paper/PaperLibrary';
 import { RecordCenter } from './components/record/RecordCenter';
 import { drawReportCardCanvas, downloadReportPng, downloadReportPdf } from './utils/reportCard';
+import { ToastContainer, ConfirmContainer, showToast, confirmAsync } from './utils/toast';
+import { ChangePassword } from './components/auth/ChangePassword';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -26,6 +28,7 @@ function App() {
   const [selectedExamId, setSelectedExamId] = useState<string>('');
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<string>('');
+  const [selectedRedo, setSelectedRedo] = useState<boolean>(false);
 
   // 报告浏览大厅所需数据状态
   const [viewerData, setViewerData] = useState<any>(null);
@@ -55,16 +58,23 @@ function App() {
 
   const handleLoginSuccess = (loggedInUser: any) => {
     setUser(loggedInUser);
-    setView('dashboard');
+    // P2-15 学生首次登录强制改密
+    setView(loggedInUser.mustChangePassword ? 'change_password' : 'dashboard');
   };
 
-  const handleLogout = () => {
-    if (window.confirm('确认退出登录本系统吗？')) {
-      localStorage.removeItem('kaoshi_token');
-      localStorage.removeItem('kaoshi_user');
-      setUser(null);
-      setView('login');
-    }
+  const handleStartExam = (examId: string, redo = false) => {
+    setSelectedExamId(examId);
+    setSelectedRedo(redo);
+    setView('student_workspace');
+  };
+
+  const handleLogout = async () => {
+    const ok = await confirmAsync('确认退出登录本系统吗？');
+    if (!ok) return;
+    localStorage.removeItem('kaoshi_token');
+    localStorage.removeItem('kaoshi_user');
+    setUser(null);
+    setView('login');
   };
 
   // 陪伴看报告大厅（载入三层画布）
@@ -78,16 +88,22 @@ function App() {
       const data = await api.get<any>(`/api/exams/${examId}/submission/${studentId}`);
       setViewerData(data);
     } catch (error: any) {
-      alert(error.message || '获取学习报告失败');
+      showToast(error.message || '获取学习报告失败', 'error');
       setView('dashboard');
     } finally {
       setViewerLoading(false);
     }
   };
 
-  const handleBindSuccess = (newChildId: string) => {
+  const handleBindSuccess = (newChildId: string, newChildIds?: string[]) => {
     if (user) {
-      const updatedUser = { ...user, childId: newChildId };
+      const childIds =
+        newChildIds && newChildIds.length
+          ? newChildIds
+          : Array.isArray(user.childIds) && user.childIds.length
+          ? [...user.childIds, newChildId].filter((v, i, a) => a.indexOf(v) === i)
+          : [newChildId];
+      const updatedUser = { ...user, childId: newChildId, childIds };
       setUser(updatedUser);
       localStorage.setItem('kaoshi_user', JSON.stringify(updatedUser));
     }
@@ -129,17 +145,20 @@ function App() {
           boxShadow: '0 4px 20px rgba(100,110,130,0.04)',
         }}
       >
-        <div 
-          onClick={() => user && setView('dashboard')}
-          className="flex items-center gap-2 cursor-pointer transition-transform hover:scale-[1.02]"
-        >
-          <span style={{ fontSize: '28px' }} className="jelly-jump">📚</span>
-          <span className="text-xl font-black text-gray-800 tracking-wider">
-            快乐作业考试本
-          </span>
+        <div className="flex items-center gap-2">
+          <div
+            onClick={() => user && setView('dashboard')}
+            className="flex items-center gap-2 cursor-pointer transition-transform hover:scale-[1.02]"
+          >
+            <span style={{ fontSize: '28px' }} className="jelly-jump">📚</span>
+            <span className="text-xl font-black text-gray-800 tracking-wider">
+              快乐作业考试本
+            </span>
+          </div>
           <span className="badge-jelly text-[10px] bg-red-100 text-red-600 border border-red-300 font-bold scale-90 py-0.5">
             {SEGMENT_LABELS[theme]} 🍎
           </span>
+          <ThemeSwitcher variant="inline" />
         </div>
 
         {user && (
@@ -179,8 +198,6 @@ function App() {
         )}
       </header>
 
-      <ThemeSwitcher />
-
       {/* 核心页面大屏加载区 */}
       <main className="flex-1 py-8 px-4 w-full">
         {view === 'login' && (
@@ -206,10 +223,7 @@ function App() {
             {user.role === 'student' && (
               <StudentDashboard
                 studentId={user.id}
-                onStartExam={(examId) => {
-                  setSelectedExamId(examId);
-                  setView('student_workspace');
-                }}
+                onStartExam={handleStartExam}
                 onViewReport={handleOpenReportViewer}
               />
             )}
@@ -217,6 +231,7 @@ function App() {
             {user.role === 'parent' && (
               <ParentDashboard
                 initialChildId={user.childId}
+                childIds={user.childIds}
                 onBindSuccess={handleBindSuccess}
                 onViewReport={handleOpenReportViewer}
               />
@@ -235,8 +250,13 @@ function App() {
         {view === 'student_workspace' && (
           <StudentWorkspace
             examId={selectedExamId}
+            isRedo={selectedRedo}
             onBack={() => setView('dashboard')}
           />
+        )}
+
+        {view === 'change_password' && user && (
+          <ChangePassword user={user} onChanged={() => setView('dashboard')} />
         )}
 
         {view === 'grade_workspace' && (
@@ -363,6 +383,10 @@ function App() {
       >
         <span>📚 快乐教研与作业答题大本营 ©2026 | 面向少儿量身定制 🍎</span>
       </footer>
+
+      {/* 全局轻量 Toast + 自定义确认弹层（替代原生 alert/confirm，适配 Pad） */}
+      <ToastContainer />
+      <ConfirmContainer />
     </div>
   );
 }

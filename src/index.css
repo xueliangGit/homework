@@ -208,13 +208,13 @@ body {
   margin: 20px 0;
 }
 
-/* 跳动动效 */
+/* 跳动动效（已停用：图标不再上下晃动） */
 @keyframes jump {
   0%, 100% { transform: translateY(0) scale(1); }
   50% { transform: translateY(-12px) scale(1.05); }
 }
 .jelly-jump {
-  animation: jump 0.8s infinite ease-in-out;
+  animation: none;
 }
 
 /* 🏆 巨幕大屏黄金双栏自适应 Vanilla CSS 声明 */

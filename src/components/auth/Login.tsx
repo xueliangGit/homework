@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api } from '../../api';
+import { api, authApi } from '../../api';
 import { LogIn, UserPlus, Sparkles } from 'lucide-react';
 
 interface LoginProps {
@@ -16,6 +16,13 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [successMsg, setSuccessMsg] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
+
+  // P2-15 找回密码：学号 + 老师下发绑定码自助重置
+  const [showReset, setShowReset] = useState<boolean>(false);
+  const [resetUsername, setResetUsername] = useState<string>('');
+  const [resetBindCode, setResetBindCode] = useState<string>('');
+  const [resetNewP, setResetNewP] = useState<string>('');
+  const [resetMsg, setResetMsg] = useState<string>('');
 
   // 智能纠正角色，根除注册死锁
   const switchMode = () => {
@@ -55,6 +62,35 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       onLoginSuccess(data.user);
     } catch (err: any) {
       setErrorMsg(err.message || '登录失败，请检查账号密码');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // P2-15 找回密码：学号 + 老师下发的绑定码自助重置
+  const handleReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetUsername || !resetBindCode || !resetNewP) {
+      setResetMsg('请把学号、绑定码和新密码都填上哦');
+      return;
+    }
+    setResetMsg('');
+    setLoading(true);
+    try {
+      const data = await authApi.resetPassword({
+        username: resetUsername,
+        bindCode: resetBindCode,
+        newPassword: resetNewP,
+      });
+      setResetMsg('🎉 ' + (data.message || '密码已重置，去登录吧'));
+      setTimeout(() => {
+        setShowReset(false);
+        setResetUsername('');
+        setResetBindCode('');
+        setResetNewP('');
+      }, 1800);
+    } catch (err: any) {
+      setResetMsg(err.message || '找回失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -302,7 +338,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           </form>
 
           {/* 翻转切换 */}
-          <div className="text-center mt-6 border-t border-dashed border-gray-200 pt-5">
+          <div className="text-center mt-6 border-t border-dashed border-gray-200 pt-5 flex flex-col gap-3">
             <button
               type="button"
               onClick={switchMode}
@@ -310,6 +346,61 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             >
               {isLogin ? '没有账号？家长或老师点这里注册 ✏' : '已有账号？去登录大厅吧 🎒'}
             </button>
+
+            {isLogin && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowReset(v => !v)}
+                  className="text-xs font-black text-blue-500 hover:text-blue-700 cursor-pointer bg-transparent border-none underline transition-colors"
+                >
+                  忘记密码？用学号 + 绑定码找回 🔑
+                </button>
+
+                {showReset && (
+                  <form onSubmit={handleReset} className="flex flex-col gap-3 mt-2 p-4 bg-amber-50 rounded-2xl border border-amber-200 text-left">
+                    <input
+                      type="text"
+                      placeholder="学号"
+                      value={resetUsername}
+                      onChange={(e) => setResetUsername(e.target.value)}
+                      className="input-jelly text-sm"
+                      required
+                    />
+                    <input
+                      type="text"
+                      placeholder="绑定码（老师下发，6 位）"
+                      value={resetBindCode}
+                      onChange={(e) => setResetBindCode(e.target.value.toUpperCase())}
+                      className="input-jelly text-sm"
+                      maxLength={6}
+                      required
+                    />
+                    <input
+                      type="password"
+                      placeholder="新密码（至少 4 位）"
+                      value={resetNewP}
+                      onChange={(e) => setResetNewP(e.target.value)}
+                      className="input-jelly text-sm"
+                      required
+                    />
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="btn-3d font-black py-2.5 text-sm"
+                      style={{ backgroundColor: 'var(--color-orange)', borderColor: 'var(--color-orange-depth)', color: '#fff', boxShadow: '0 4px 0 var(--color-orange-depth)' }}
+                    >
+                      {loading ? '重置中...' : '重置密码 🔑'}
+                    </button>
+                    {resetMsg && (
+                      <div className={`p-2.5 rounded-xl border text-xs font-extrabold ${resetMsg.startsWith('🎉') ? 'bg-green-50 border-green-200 text-green-600' : 'bg-red-50 border-red-200 text-red-600'}`}>
+                        {resetMsg}
+                      </div>
+                    )}
+                  </form>
+                )}
+              </>
+            )}
           </div>
         </div>
       </div>

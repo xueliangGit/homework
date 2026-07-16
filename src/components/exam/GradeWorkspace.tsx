@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../api';
+import { showToast, confirmAsync } from '../../utils/toast';
 import { CanvasDraw } from '../shared/CanvasDraw';
 import { ArrowLeft, ChevronLeft, ChevronRight, Edit3 } from 'lucide-react';
 
@@ -121,13 +122,13 @@ export const GradeWorkspace: React.FC<GradeWorkspaceProps> = ({
   const handleGradeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (score === '') {
-      alert('老师，请先给这份卷子打个分数吧 💯');
+      showToast('老师，请先给这份卷子打个分数吧 💯', 'error');
       return;
     }
 
     const numScore = Number(score);
     if (isNaN(numScore) || numScore < 0 || numScore > 100) {
-      alert('打分范围应该在 0 ~ 100 分之间哦');
+      showToast('打分范围应该在 0 ~ 100 分之间哦', 'error');
       return;
     }
 
@@ -136,31 +137,37 @@ export const GradeWorkspace: React.FC<GradeWorkspaceProps> = ({
       canvasData: annotationsMap[Number(key)],
     })).filter(ann => ann.canvasData !== '');
 
-    if (window.confirm(`确认给学生【${studentName}】评分：${score}分 吗？`)) {
-      setSubmitting(true);
-      try {
-        // 雷达图维度：老师未填的维度回退为总分，保证雷达图饱满可读
-        const dims = dimensionScores.map(d => ({
-          key: d.key,
-          label: d.label,
-          score: d.score > 0 ? d.score : numScore,
-          full: d.full,
-        }));
+    const ok = await confirmAsync(`确认给学生【${studentName}】评分：${score}分 吗？`);
+    if (!ok) return;
+    setSubmitting(true);
+    try {
+      // 雷达图维度：老师未填的维度回退为总分，保证雷达图饱满可读
+      const dims = dimensionScores.map(d => ({
+        key: d.key,
+        label: d.label,
+        score: d.score > 0 ? d.score : numScore,
+        full: d.full,
+      }));
 
-        await api.post(`/api/submissions/${submissionId}/grade`, {
-          score: numScore,
-          comment: comment,
-          teacherAnnotations,
-          dimensionScores: dims,
-        });
+      const res = await api.post<{ data: any }>(`/api/submissions/${submissionId}/grade`, {
+        score: numScore,
+        comment: comment,
+        teacherAnnotations,
+        dimensionScores: dims,
+      });
 
-        alert('📝 批改成功！成绩和红笔字迹已实时同步给学生与家长。');
-        onBack();
-      } catch (err: any) {
-        alert(err.message || '保存批改失败，请重试');
-      } finally {
-        setSubmitting(false);
+      // P2-11 迟交扣分提示
+      const penalty = res?.data?.latePenaltyApplied || 0;
+      if (penalty > 0) {
+        showToast(`📝 批改成功！已扣除迟交 ${penalty} 分（最终 ${res?.data?.score} 分）`, 'success');
+      } else {
+        showToast('📝 批改成功！成绩和红笔字迹已实时同步给学生与家长。', 'success');
       }
+      onBack();
+    } catch (err: any) {
+      showToast(err.message || '保存批改失败，请重试', 'error');
+    } finally {
+      setSubmitting(false);
     }
   };
 

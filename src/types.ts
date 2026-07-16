@@ -3,7 +3,9 @@ export interface User {
   username: string;
   role: 'teacher' | 'student' | 'parent';
   name: string;
-  childId?: string;
+  childId?: string; // 兼容旧端（单孩）
+  childIds?: string[]; // 多孩：绑定的孩子 studentId 列表
+  mustChangePassword?: boolean; // 学生首次登录后强制改密
 }
 
 export interface Class {
@@ -77,10 +79,14 @@ export interface StudentExamItem {
   className: string;
   createdAt: number;
   totalPages: number;
-  status: 'unstarted' | 'submitted' | 'graded';
+  status: 'unstarted' | 'drafting' | 'submitted' | 'graded';
   score?: number;
   comment?: string;
   submissionId?: string;
+  redoSubmissionId?: string; // 订正版答卷 id（P2-8）
+  canRedo?: boolean; // 已批改且可订正（P2-8）
+  lastSavedAt?: number; // 草稿最近一次云端存盘时间
+  draftPages?: number; // 草稿已完成到第几页（1-based）
   timePolicy?: TimePolicy | null;
   closed?: boolean;
   theme?: { segment?: Segment; subject?: string } | null;

@@ -5,17 +5,19 @@ import path from 'path';
 import fs from 'fs';
 import { db } from './db';
 import { authenticateToken, requireRole } from './middleware/auth';
-import { register, login, getMe, parentBindChild } from './controllers/auth';
-import { createClass, getClasses, addStudentToClass, exportClassGrades } from './controllers/classes';
+import { register, login, getMe, parentBindChild, changePassword, resetPassword, checkUsername, suggestUsername } from './controllers/auth';
+import { createClass, getClasses, addStudentToClass, removeStudentFromClass, exportClassGrades } from './controllers/classes';
 import {
   createExam,
   getClassExams,
   getStudentExams,
+  saveDraft,
   submitExam,
   getSubmissionDetails,
   gradeSubmission,
   getChildReports,
   deleteExam,
+  getTeacherStats,
 } from './controllers/exams';
 import {
   createPaper,
@@ -96,11 +98,17 @@ app.post('/api/auth/register', authLimiter, jsonDefault, register);
 app.post('/api/auth/login', authLimiter, jsonDefault, login);
 app.get('/api/auth/me', authenticateToken, getMe);
 app.post('/api/auth/parent/bind', authenticateToken, requireRole(['parent']), jsonDefault, parentBindChild);
+app.post('/api/auth/change-password', authenticateToken, jsonDefault, changePassword);
+app.post('/api/auth/reset-password', authLimiter, jsonDefault, resetPassword);
+// 学号查重 / 自动生成建议（教师端实时校验用，P2-学生账号体验）
+app.get('/api/users/check-username', authenticateToken, jsonDefault, checkUsername);
+app.get('/api/users/suggest-username', authenticateToken, jsonDefault, suggestUsername);
 
 // ================= CLASS ROUTES (班级路由) =================
 app.post('/api/classes', authenticateToken, requireRole(['teacher']), jsonDefault, createClass);
 app.get('/api/classes', authenticateToken, requireRole(['teacher', 'student']), getClasses);
 app.post('/api/classes/:classId/students', authenticateToken, requireRole(['teacher']), jsonDefault, addStudentToClass);
+app.delete('/api/classes/:classId/students/:studentId', authenticateToken, requireRole(['teacher']), removeStudentFromClass);
 app.get('/api/classes/:classId/export', authenticateToken, requireRole(['teacher']), exportClassGrades);
 
 // ================= EXAM ROUTES (试卷与答卷路由) =================
@@ -108,10 +116,12 @@ app.post('/api/exams', authenticateToken, requireRole(['teacher']), jsonImage, c
 app.delete('/api/exams/:examId', authenticateToken, requireRole(['teacher']), deleteExam);
 app.get('/api/exams/class/:classId', authenticateToken, requireRole(['teacher']), getClassExams);
 app.get('/api/exams/student', authenticateToken, requireRole(['student']), getStudentExams);
+app.post('/api/exams/:examId/draft', authenticateToken, requireRole(['student']), jsonImage, saveDraft);
 app.post('/api/exams/:examId/submit', authenticateToken, requireRole(['student']), jsonImage, submitExam);
 app.get('/api/exams/:examId/submission/:studentId', authenticateToken, getSubmissionDetails);
 app.post('/api/submissions/:submissionId/grade', authenticateToken, requireRole(['teacher']), jsonImage, gradeSubmission);
 app.get('/api/parents/child/submissions', authenticateToken, requireRole(['parent']), getChildReports);
+app.get('/api/teacher/stats', authenticateToken, requireRole(['teacher']), getTeacherStats);
 
 // ================= PAPER ROUTES (预存试卷库) =================
 app.post('/api/papers', authenticateToken, requireRole(['teacher']), jsonImage, createPaper);

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { logsApi } from '../../api';
 import type { LogItem } from '../../types';
+import { showToast } from '../../utils/toast';
 
 const ACTION_LABELS: Record<string, { text: string; color: string }> = {
   create_paper: { text: '新建试卷', color: '#16A34A' },
@@ -30,7 +31,7 @@ export const RecordCenter: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       const res = await logsApi.list();
       setLogs(res.data || []);
     } catch (e: any) {
-      alert(e.message || '加载记录失败');
+      showToast(e.message || '加载记录失败', 'error');
     } finally {
       setLoading(false);
     }
