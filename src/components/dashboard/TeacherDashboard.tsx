@@ -51,8 +51,23 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  // P2-12 教师待批改/迟交统计（用于大厅角标与提醒）
-  const [stats, setStats] = useState<{ stats: Record<string, { pending: number; late: number }>; totalPending: number; totalLate: number }>({ stats: {}, totalPending: 0, totalLate: 0 });
+  // P2-12 教师待批改/迟交/完成率统计（用于大厅角标、看板与催交）
+  const [stats, setStats] = useState<{
+    stats: Record<string, {
+      total: number;
+      submitted: number;
+      pending: number;
+      late: number;
+      notSubmitted: number;
+      completionRate: number;
+      notSubmittedNames: string[];
+    }>;
+    totalPending: number;
+    totalLate: number;
+    grandTotal: number;
+    grandSubmitted: number;
+    grandCompletionRate: number;
+  }>({ stats: {}, totalPending: 0, totalLate: 0, grandTotal: 0, grandSubmitted: 0, grandCompletionRate: 0 });
 
   // 获取该教师的所有班级
   const loadClasses = async () => {
@@ -753,6 +768,9 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           <h3 className="text-md font-black border-b-2 border-gray-border pb-3 flex items-center gap-2 text-gray-700">
             <ClipboardList size={20} className="text-yellow-500" />
             <span>试卷与批改中心</span>
+            <span className="badge-jelly text-[10px] bg-sky-100 text-sky-700 border-sky-200">
+              总完成率 {stats.grandCompletionRate}%
+            </span>
             {(stats.totalPending > 0 || stats.totalLate > 0) && (
               <span className="badge-jelly text-[10px] bg-amber-100 text-amber-700 border-amber-200">
                 待批改 {stats.totalPending} ｜ 迟交 {stats.totalLate}
@@ -770,11 +788,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     onChange={(e) => setActiveExamId(e.target.value)}
                     className="input-jelly text-xs py-2 bg-white flex-1"
                   >
-                    {examsList.map(e => (
-                      <option key={e.id} value={e.id}>
-                        {e.title}{stats.stats[e.id]?.pending ? ` (待批${stats.stats[e.id].pending})` : ''}
-                      </option>
-                    ))}
+                    {examsList.map(e => {
+                      const st = stats.stats[e.id];
+                      return (
+                        <option key={e.id} value={e.id}>
+                          {e.title}
+                          {st ? ` (已交${st.submitted}/${st.total}·${st.completionRate}%)` : ''}
+                          {st?.pending ? ` ·待批${st.pending}` : ''}
+                        </option>
+                      );
+                    })}
                   </select>
                   {activeExamId && (
                     <button
@@ -795,7 +818,31 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               </div>
 
               <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto border-t border-dashed border-gray-300 pt-4 mt-2">
-                <span className="text-xs font-extrabold text-gray-400 mb-1">学生作答进度监控：</span>
+                {(() => {
+                  const st = stats.stats[activeExamId];
+                  if (!st) return null;
+                  return (
+                    <div className="flex flex-col gap-1.5 mb-1">
+                      <div className="flex items-center justify-between text-xs font-extrabold text-gray-600">
+                        <span>学生作答进度监控</span>
+                        <span className={st.completionRate === 100 ? 'text-green-600' : 'text-sky-600'}>
+                          已交 {st.submitted}/{st.total}（{st.completionRate}%）
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-gray-200 overflow-hidden">
+                        <div
+                          className="h-full bg-green-400 transition-all duration-500"
+                          style={{ width: `${st.completionRate}%` }}
+                        />
+                      </div>
+                      {st.notSubmittedNames.length > 0 && (
+                        <div className="text-[11px] text-amber-600 font-semibold leading-snug">
+                          待催交（{st.notSubmittedNames.length}人）：{st.notSubmittedNames.join('、')}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 
                 {submissionsList.length > 0 ? (
                   submissionsList.map((item) => {

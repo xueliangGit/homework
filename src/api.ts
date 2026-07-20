@@ -112,9 +112,20 @@ export const authApi = {
 export const statsApi = {
   teacher: () =>
     api.get<{
-      stats: Record<string, { pending: number; late: number }>;
+      stats: Record<string, {
+        total: number;
+        submitted: number;
+        pending: number;
+        late: number;
+        notSubmitted: number;
+        completionRate: number;
+        notSubmittedNames: string[];
+      }>;
       totalPending: number;
       totalLate: number;
+      grandTotal: number;
+      grandSubmitted: number;
+      grandCompletionRate: number;
     }>('/api/teacher/stats'),
 };
 

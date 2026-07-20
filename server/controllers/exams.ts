@@ -670,24 +670,70 @@ export const deleteExam = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// 9. 教师：获取各作业待批改/迟交统计（用于大厅角标与提醒）
+// 9. 教师：获取各作业待批改/迟交/完成率统计（用于大厅角标、看板与催交）
 export const getTeacherStats = async (req: AuthRequest, res: Response) => {
   const teacherId = req.user!.id;
   try {
     const exams = await db.getCollection('exams');
     const submissions = await db.getCollection('submissions');
+    const classes = await db.getCollection('classes');
+    const users = await db.getCollection('users');
     const myExams = exams.filter(e => e.teacherId === teacherId);
-    const stats: Record<string, { pending: number; late: number }> = {};
+    const stats: Record<string, {
+      total: number;
+      submitted: number;
+      pending: number;
+      late: number;
+      notSubmitted: number;
+      completionRate: number;
+      notSubmittedNames: string[];
+    }> = {};
     let totalPending = 0;
     let totalLate = 0;
+    let grandTotal = 0;
+    let grandSubmitted = 0;
     for (const exam of myExams) {
-      const subs = submissions.filter(s => s.examId === exam.id && s.status === 'submitted');
-      const late = subs.filter(s => s.isLate).length;
-      stats[exam.id] = { pending: subs.length, late };
-      totalPending += subs.length;
+      const examSubs = submissions.filter(s => s.examId === exam.id);
+      const submittedSubs = examSubs.filter(s => s.status === 'submitted' || s.status === 'graded');
+      const pendingSubs = examSubs.filter(s => s.status === 'submitted');
+      const late = pendingSubs.filter(s => s.isLate).length;
+
+      // 分母：该作业目标班级的学生人数；无班级（历史/跨班）则用有作答记录的学生兜底
+      const cls = exam.classId ? classes.find(c => c.id === exam.classId) : undefined;
+      const classSize = cls ? (cls.studentIds?.length || 0) : 0;
+      const denominator = classSize > 0 ? classSize : new Set(examSubs.map(s => s.studentId)).size;
+      const submittedCount = submittedSubs.length;
+      const notSubmitted = Math.max(0, denominator - submittedCount);
+      const completionRate = denominator > 0 ? Math.round((submittedCount / denominator) * 100) : 0;
+
+      // 未交学生名单（供老师一键催交）
+      const submittedIds = new Set(submittedSubs.map(s => s.studentId));
+      const notSubmittedNames: string[] = [];
+      if (cls && cls.studentIds?.length) {
+        for (const sid of cls.studentIds) {
+          if (!submittedIds.has(sid)) {
+            const u = users.find(x => x.id === sid);
+            notSubmittedNames.push(u ? u.name : '未知');
+          }
+        }
+      }
+
+      stats[exam.id] = {
+        total: denominator,
+        submitted: submittedCount,
+        pending: pendingSubs.length,
+        late,
+        notSubmitted,
+        completionRate,
+        notSubmittedNames,
+      };
+      totalPending += pendingSubs.length;
       totalLate += late;
+      grandTotal += denominator;
+      grandSubmitted += submittedCount;
     }
-    res.json({ stats, totalPending, totalLate });
+    const grandCompletionRate = grandTotal > 0 ? Math.round((grandSubmitted / grandTotal) * 100) : 0;
+    res.json({ stats, totalPending, totalLate, grandTotal, grandSubmitted, grandCompletionRate });
   } catch (error) {
     console.error('获取教师统计错误：', error);
     res.status(500).json({ message: '获取统计失败' });
