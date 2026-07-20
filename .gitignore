@@ -29,3 +29,7 @@ dist-ssr
 
 # 本机 Agent 运行态（非项目源码）
 .workbuddy/
+
+# 一键部署脚本产物（数据库备份 / 升级回滚记录，绝不入库）
+backups/
+.upgrade-prev-commit

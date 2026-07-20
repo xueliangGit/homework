@@ -15,9 +15,6 @@ npm-debug.log*
 .env
 .env.*
 
-# Docker 自身与编辑器
-Dockerfile
-docker-compose.yml
-.dockerignore
+# Docker 自身与编辑器（Dockerfile / compose 由宿主机读取，勿打入上下文）
 .vscode
 .idea

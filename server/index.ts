@@ -141,6 +141,11 @@ app.post('/api/assignments/:id/reopen', authenticateToken, requireRole(['teacher
 // ================= LOG ROUTES (全链路操作留痕) =================
 app.get('/api/logs', authenticateToken, requireRole(['teacher']), listLogs);
 
+// ================= 健康检查（供部署脚本 / 容器探针使用） =================
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() });
+});
+
 // ================= 生产环境：托管前端静态资源 =================
 // 单机 Docker 部署时，后端 Express 直接托管构建产物 dist/，前后端同域同源，无需额外 nginx
 const DIST_DIR = path.join(process.cwd(), 'dist');
