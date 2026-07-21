@@ -141,20 +141,18 @@ app.post('/api/assignments/:id/reopen', authenticateToken, requireRole(['teacher
 // ================= LOG ROUTES (全链路操作留痕) =================
 app.get('/api/logs', authenticateToken, requireRole(['teacher']), listLogs);
 
-// ================= 健康检查（供部署脚本 / 容器探针使用） =================
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, time: new Date().toISOString() });
-});
-
 // ================= 生产环境：托管前端静态资源 =================
 // 单机 Docker 部署时，后端 Express 直接托管构建产物 dist/，前后端同域同源，无需额外 nginx
 const DIST_DIR = path.join(process.cwd(), 'dist');
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
-  // 单页应用兜底：非 /api 的 GET 请求统一返回 index.html（前端用状态路由，无独立子路径）
+  // 单页应用兜底：仅对“无文件扩展名”的 GET 路由返回 index.html（前端用状态路由，无独立子路径）。
+  // 含扩展名的请求（/assets/*.js、/favicon.svg 等）视为静态资源，缺失时直接 404，
+  // 绝不能用 index.html 兜底——否则浏览器会把 HTML 当成 CSS/JS，报 MIME 类型错误。
   app.use((req, res, next) => {
     if (req.method !== 'GET') return next();
     if (req.path.startsWith('/api')) return next();
+    if (path.extname(req.path)) return next(); // 静态资源缺失 → 交 Express 默认 404 处理
     res.sendFile(path.join(DIST_DIR, 'index.html'));
   });
 }

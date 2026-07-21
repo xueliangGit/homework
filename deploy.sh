@@ -10,6 +10,7 @@
 # 用法：
 #   ./deploy.sh init      首次部署：自动生成 .env（随机 JWT 密钥）→ 构建镜像 → 启动
 #   ./deploy.sh upgrade   一键升级：备份数据库 → git pull → 重建容器 → 健康检查 → 失败自动回滚
+#   ./deploy.sh rebuild   干净重建（--no-cache 强制重编，解决 dist 资源异常 / 构建缓存脏）
 #   ./deploy.sh backup    仅备份数据库卷到 backups/
 #   ./deploy.sh rollback  回滚到上一次 upgrade 之前的版本 + 数据库
 #   ./deploy.sh status    查看容器 / 镜像 / 卷状态
@@ -170,6 +171,21 @@ cmd_rollback() {
   docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate
   log "✅ 已回滚到 $pc"
 }
+cmd_rebuild() {
+  require_docker; require_git; require_curl
+  log "=== 干净重建（--no-cache，约 1-3 分钟）==="
+  ensure_env
+  docker compose -f "$COMPOSE_FILE" build --no-cache
+  docker compose -f "$COMPOSE_FILE" up -d --force-recreate
+  log "等待服务健康..."
+  if health_check; then
+    log "✅ 重建成功！访问 http://localhost:4000"
+  else
+    err "❌ 健康检查失败，请查看日志： ./deploy.sh logs"
+    exit 1
+  fi
+}
+
 cmd_status() { require_docker; docker compose -f "$COMPOSE_FILE" ps; echo "--- 镜像 ---"; docker images "$IMAGE"; echo "--- 卷 ---"; docker volume ls --filter "name=kaoshi"; }
 cmd_logs()   { require_docker; docker compose -f "$COMPOSE_FILE" logs -f --tail=100 "$SERVICE"; }
 cmd_restart(){ require_docker; docker compose -f "$COMPOSE_FILE" restart "$SERVICE"; }
@@ -179,6 +195,7 @@ cmd_start()  { require_docker; docker compose -f "$COMPOSE_FILE" start "$SERVICE
 case "${1:-}" in
   init)    cmd_init ;;
   upgrade) cmd_upgrade ;;
+  rebuild) cmd_rebuild ;;
   backup)  cmd_backup ;;
   rollback)cmd_rollback ;;
   status)  cmd_status ;;
@@ -186,5 +203,5 @@ case "${1:-}" in
   restart) cmd_restart ;;
   stop)    cmd_stop ;;
   start)   cmd_start ;;
-  *) echo "用法: $0 {init|upgrade|backup|rollback|status|logs|restart|stop|start}"; exit 1 ;;
+  *) echo "用法: $0 {init|upgrade|rebuild|backup|rollback|status|logs|restart|stop|start}"; exit 1 ;;
 esac
