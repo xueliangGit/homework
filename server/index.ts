@@ -145,7 +145,19 @@ app.get('/api/logs', authenticateToken, requireRole(['teacher']), listLogs);
 // 单机 Docker 部署时，后端 Express 直接托管构建产物 dist/，前后端同域同源，无需额外 nginx
 const DIST_DIR = path.join(process.cwd(), 'dist');
 if (fs.existsSync(DIST_DIR)) {
-  app.use(express.static(DIST_DIR));
+  // 静态资源：显式锁定正确的 Content-Type 与不可变缓存策略。
+  // 作用：部分前置反向代理 / WAF 会对 Content-Type 模糊的脚本响应返回 500，
+  // 锁死 text/javascript / text/css 可避免被误判；immutable 让浏览器不再发条件请求。
+  app.use(express.static(DIST_DIR, {
+    setHeaders(res, filePath) {
+      if (filePath.endsWith('.js')) res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+      else if (filePath.endsWith('.css')) res.setHeader('Content-Type', 'text/css; charset=utf-8');
+      else if (filePath.endsWith('.svg')) res.setHeader('Content-Type', 'image/svg+xml');
+      else if (filePath.endsWith('.json')) res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    },
+  }));
   // 单页应用兜底：仅对“无文件扩展名”的 GET 路由返回 index.html（前端用状态路由，无独立子路径）。
   // 含扩展名的请求（/assets/*.js、/favicon.svg 等）视为静态资源，缺失时直接 404，
   // 绝不能用 index.html 兜底——否则浏览器会把 HTML 当成 CSS/JS，报 MIME 类型错误。
